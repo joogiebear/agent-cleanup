@@ -17,7 +17,7 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
-The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **Agent data**, **Build junk**, **Updates**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
+The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **Agent data**, **Duplicates**, **Build junk**, **Updates**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
 
 ![Details panel](docs/details.png)
 
@@ -50,6 +50,14 @@ Claude Code and Codex keep every session's history (`~/.claude/projects`, `~/.cl
 A project on a drive or network share that isn't connected right now doesn't count as deleted. History used in the last week is marked **Used recently** and needs a tick first, in case the project only moved. **Clean up** leaves those out.
 
 ![Agent data](docs/agentdata.png)
+
+## Duplicates
+
+The **Duplicates** page groups the repos the scan found by their remote, so `https://github.com/me/tool.git`, `git@github.com:me/tool` and `~/AppData/Local/Temp/tool` cloned by an agent all count as one repo. In each group one copy is kept: the one in a project folder, otherwise the most recently used. Pin another copy to keep that one instead.
+
+**Clean up** recycles the extra copies that are outside your project folders and have nothing that exists only in that copy. A copy with uncommitted changes, unpushed commits or stashes is marked **Has unsaved work** and needs a tick before it can be recycled.
+
+![Duplicates](docs/duplicates.png)
 
 ## Build junk
 
@@ -109,7 +117,7 @@ Bump `version` in `Cargo.toml` and merge to `main`. The Release workflow builds 
 
 ## Roadmap
 
-1. Duplicate clones of the same repo.
+Code signing, so Windows SmartScreen stops warning on first run. It needs a paid code signing certificate.
 
 ## Development
 
@@ -120,4 +128,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
