@@ -38,7 +38,7 @@ It's written in Rust with [egui](https://github.com/emilk/egui), so it's a singl
 
 **Download:** grab `agent-cleanup-<version>-windows-x64.exe` from the [latest release](../../releases/latest). It's a single file with no installer, so just run it.
 
-To publish a new release, push a version tag (for example `git tag v0.2.0 && git push origin v0.2.0`). The Release workflow builds the .exe on Windows and attaches it.
+To publish a new version, create a release on GitHub with a tag like `v0.2.0`. The Release workflow builds the .exe on Windows and attaches it a few minutes later.
 
 **Or build it yourself** with [Rust](https://rustup.rs):
 
