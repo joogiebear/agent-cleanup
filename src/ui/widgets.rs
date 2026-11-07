@@ -116,9 +116,10 @@ pub fn section_label(text: &str) -> Div {
 pub fn icon_action(
     id: impl Into<ElementId>,
     name: IconName,
-    tip: &'static str,
+    tip: impl Into<SharedString>,
     danger: bool,
 ) -> Stateful<Div> {
+    let tip: SharedString = tip.into();
     let fg = if danger { RED } else { MUTED };
     div()
         .id(id)
@@ -131,7 +132,7 @@ pub fn icon_action(
         .cursor_pointer()
         .hover(move |s| s.bg(if danger { tint(RED, 0.15) } else { ELEVATED }))
         .child(icon(name, 16., fg))
-        .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
 }
 
 /// A plain text button with an optional icon, styled to the palette.

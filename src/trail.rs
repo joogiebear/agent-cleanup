@@ -74,6 +74,29 @@ pub struct Touch {
 pub struct Session {
     pub cwd: Option<PathBuf>,
     pub touches: Vec<Touch>,
+    /// When the session was active and in which folder, at most one entry
+    /// a minute per folder. Used to match downloads to projects.
+    pub active: Vec<(SystemTime, PathBuf)>,
+}
+
+impl Session {
+    fn mark_active(&mut self, when: Option<SystemTime>, cwd: Option<&Path>) {
+        let (Some(when), Some(cwd)) = (when, cwd) else {
+            return;
+        };
+        if cwd.as_os_str().is_empty() {
+            return;
+        }
+        if let Some((last, dir)) = self.active.last()
+            && dir == cwd
+            && when
+                .duration_since(*last)
+                .is_ok_and(|d| d < Duration::from_secs(60))
+        {
+            return;
+        }
+        self.active.push((when, cwd.to_path_buf()));
+    }
 }
 
 /// A leftover on disk, with where it came from.
@@ -176,13 +199,14 @@ pub fn parse_claude<R: BufRead>(reader: R, home: Option<&Path>) -> Session {
         if s.cwd.is_none() {
             s.cwd.clone_from(&cwd);
         }
-        if !line.contains("tool_use") {
-            continue;
-        }
         let when = v
             .get("timestamp")
             .and_then(Value::as_str)
             .and_then(parse_iso8601);
+        s.mark_active(when, cwd.as_deref());
+        if !line.contains("tool_use") {
+            continue;
+        }
         let base = cwd.or_else(|| s.cwd.clone()).unwrap_or_default();
         let Some(blocks) = v.pointer("/message/content").and_then(Value::as_array) else {
             continue;
@@ -243,6 +267,7 @@ pub fn parse_codex<R: BufRead>(reader: R, home: Option<&Path>) -> Session {
                 s.cwd.clone_from(&cwd);
             }
         }
+        s.mark_active(when, cwd.as_deref());
         let base = cwd.clone().unwrap_or_default();
         match item.get("type").and_then(Value::as_str) {
             Some("function_call") => {

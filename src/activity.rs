@@ -22,6 +22,10 @@ impl Entry {
                     format!("Updated the app to {v}")
                 } else if let Some(cmd) = other.strip_prefix("ran ") {
                     format!("Opened a terminal to run {cmd}")
+                } else if let Some(to) = other.strip_prefix("moved to ") {
+                    format!("Moved into {to}")
+                } else if let Some(from) = other.strip_prefix("moved back from ") {
+                    format!("Moved back from {from}")
                 } else {
                     other.to_string()
                 }
