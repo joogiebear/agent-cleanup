@@ -522,6 +522,8 @@ impl AgentCleanup {
                             )),
                         ))
                         .child(divider())
+                        .child(self.weekly_row(cx))
+                        .child(divider())
                         .child(setting_row(
                             "Check for updates on startup",
                             "Looks for a new release on GitHub when the app opens. Nothing is downloaded without asking.",
@@ -569,6 +571,49 @@ impl AgentCleanup {
                         )),
                 ),
         )
+    }
+
+    fn weekly_row(&self, cx: &mut Context<Self>) -> Div {
+        use agent_cleanup::schedule::Status;
+        let status = self.weekly.clone().unwrap_or(Status::Unknown);
+        let note: Option<(&str, Rgba)> = match status {
+            Status::OtherCopy => Some((
+                "It's set up for a different copy of the app. Turn it off and on again to use this one.",
+                ORANGE,
+            )),
+            Status::Unknown => Some(("Couldn't ask Task Scheduler about it.", MUTED)),
+            _ => None,
+        };
+        let on = matches!(status, Status::On | Status::OtherCopy);
+        h_flex()
+            .gap_4()
+            .px_5()
+            .py_4()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().font_weight(FontWeight::MEDIUM).child("Weekly check"))
+                    .child(div().text_size(px(13.)).text_color(MUTED).child(
+                        "Every Monday (or the next time your PC is on) the app scans quietly and shows a notification if there's 100 MB or an old repo to clean. Nothing stays running and nothing is moved.",
+                    ))
+                    .children(note.map(|(t, c)| div().text_size(px(13.)).text_color(c).child(t))),
+            )
+            .child(
+                button("weekly-now", "Run now", ButtonKind::Secondary)
+                    .tip("Run the check now, in the background")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.run_check_now();
+                        cx.notify();
+                    })),
+            )
+            .child(Switch::new("weekly").checked(on).on_click(cx.listener(
+                |this, checked: &bool, _, cx| {
+                    this.set_weekly(*checked);
+                    cx.notify();
+                },
+            )))
     }
 
     // ---- help ----------------------------------------------------------
@@ -636,6 +681,7 @@ impl AgentCleanup {
                 )
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
                 .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
+                .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old repo to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),

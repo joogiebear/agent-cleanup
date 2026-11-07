@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "agent-cleanup"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -119,6 +119,7 @@ dependencies = [
  "self-replace",
  "serde",
  "serde_json",
+ "tauri-winrt-notification",
  "tempfile",
  "toml 1.2.1+spec-1.1.0",
  "trash",
