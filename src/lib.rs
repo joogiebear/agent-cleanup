@@ -9,4 +9,5 @@ pub mod git;
 pub mod library;
 pub mod model;
 pub mod scan;
+pub mod trail;
 pub mod update;
