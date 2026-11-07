@@ -17,10 +17,15 @@ impl Entry {
         match self.action.as_str() {
             "recycled" => "Moved to Recycle Bin".to_string(),
             "restored" => "Put back".to_string(),
-            other => match other.strip_prefix("updated to ") {
-                Some(v) => format!("Updated the app to {v}"),
-                None => other.to_string(),
-            },
+            other => {
+                if let Some(v) = other.strip_prefix("updated to ") {
+                    format!("Updated the app to {v}")
+                } else if let Some(cmd) = other.strip_prefix("ran ") {
+                    format!("Opened a terminal to run {cmd}")
+                } else {
+                    other.to_string()
+                }
+            }
         }
     }
 

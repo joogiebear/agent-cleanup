@@ -5,6 +5,7 @@ pub mod actions;
 pub mod activity;
 pub mod cache;
 pub mod config;
+pub mod deps;
 pub mod git;
 pub mod junk;
 pub mod library;
