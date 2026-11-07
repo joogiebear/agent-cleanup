@@ -12,6 +12,7 @@ mod leftovers;
 mod pages;
 mod theme;
 mod trail;
+mod updates;
 mod widgets;
 
 use gpui_kit::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};

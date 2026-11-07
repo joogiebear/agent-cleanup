@@ -52,6 +52,37 @@ pub fn open_terminal(path: &Path) {
     }
 }
 
+/// Opens a terminal in `dir` that runs `command` and stays open, so the user
+/// watches it and can stop it. Logged, like every other action.
+pub fn run_in_terminal(dir: &Path, command: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        // Windows Terminal if installed, else a classic console window.
+        let wt = Command::new("wt")
+            .arg("-d")
+            .arg(dir)
+            .args(["cmd", "/K", command])
+            .spawn();
+        if wt.is_err() {
+            Command::new("cmd")
+                .args(["/C", "start", "", "/D"])
+                .arg(dir)
+                .args(["cmd", "/K", command])
+                .spawn()?;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("x-terminal-emulator")
+            .current_dir(dir)
+            .args(["-e", "sh", "-c", &format!("{command}; exec sh")])
+            .spawn()?;
+    }
+    log_action(&format!("ran {command}"), dir);
+    Ok(())
+}
+
 /// Opens the folder in File Explorer (or the platform file manager).
 pub fn open_folder(path: &Path) {
     let program = if cfg!(windows) {
