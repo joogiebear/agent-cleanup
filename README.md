@@ -61,7 +61,7 @@ The **Updates** page shows outdated packages in your projects, using each tool's
 
 ## Weekly check
 
-Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app once a week (Mondays, or the next time the PC is on, never on battery) without opening a window. It scans like the app does and saves the results, then shows a notification if there's at least 100 MB or an old repo to clean, for example "2 old repos safe to remove (300 MB), 1.2 GB of build folders in idle projects". Clicking it opens the app. The check never moves anything, nothing stays running between checks, and it only counts things the app would mark safe. **Run now** tries it straight away. Turning the switch off removes the task.
+Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app once a week (Mondays, or the next time the PC is on, never on battery) without opening a window. It scans like the app does and saves the results, then shows a notification if there's at least 100 MB or an old repo to clean, for example "2 old repos safe to remove (300 MB), 1.2 GB of build folders in idle projects". Clicking it opens the app. The check never moves anything, nothing stays running between checks, and it only counts things the app would mark safe. **Run now** tries it straight away. Turning the switch off removes the task. The app doesn't need to be open for the check to run. If you move or rename the exe, the next time you open it the task is pointed at the new location.
 
 ## Cleaning up
 
