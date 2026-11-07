@@ -12,6 +12,46 @@ pub fn recycle(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Puts a folder previously moved by [`recycle`] back where it was.
+/// Picks the most recently deleted item with that original path.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+pub fn restore(path: &Path) -> anyhow::Result<()> {
+    use crate::config::same_path;
+    let item = trash::os_limited::list()?
+        .into_iter()
+        .filter(|i| same_path(&i.original_path(), path))
+        .max_by_key(|i| i.time_deleted)
+        .ok_or_else(|| anyhow::anyhow!("it's no longer in the Recycle Bin"))?;
+    trash::os_limited::restore_all([item])?;
+    log_action("restored", path);
+    Ok(())
+}
+
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+pub fn restore(_path: &Path) -> anyhow::Result<()> {
+    anyhow::bail!("restoring isn't supported on this platform; use the system trash")
+}
+
+/// Opens a terminal in the folder (Windows Terminal if installed, else cmd).
+pub fn open_terminal(path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if Command::new("wt").arg("-d").arg(path).spawn().is_err() {
+            let _ = Command::new("cmd")
+                .args(["/C", "start", "", "cmd", "/K", "cd", "/d"])
+                .arg(path)
+                .spawn();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("x-terminal-emulator")
+            .current_dir(path)
+            .spawn();
+    }
+}
+
 /// Opens the folder in File Explorer (or the platform file manager).
 pub fn open_folder(path: &Path) {
     let program = if cfg!(windows) {
@@ -73,6 +113,21 @@ pub fn utc_timestamp(t: SystemTime) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    fn recycle_then_restore() {
+        let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("restore-me-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "hi").unwrap();
+        recycle(&dir).unwrap();
+        assert!(!dir.exists());
+        restore(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "hi");
+    }
 
     #[test]
     fn timestamps() {

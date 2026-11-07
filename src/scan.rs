@@ -13,9 +13,10 @@ use std::time::{Duration, Instant, SystemTime};
 use walkdir::WalkDir;
 
 pub enum ScanEvent {
-    /// Folders looked at so far.
+    /// Folders looked at so far, and the one being looked at now.
     Progress {
         dirs: u64,
+        current: PathBuf,
     },
     /// A repo was found; its details arrive later as `Inspected`.
     Found(PathBuf),
@@ -34,7 +35,7 @@ pub fn find_repos(
     cfg: &Config,
     cancel: &AtomicBool,
     mut on_found: impl FnMut(PathBuf),
-    mut on_progress: impl FnMut(u64),
+    mut on_progress: impl FnMut(u64, &Path),
 ) -> u64 {
     let mut dirs = 0u64;
     let mut seen = HashSet::new();
@@ -49,18 +50,13 @@ pub fn find_repos(
             if !entry.file_type().is_dir() {
                 continue;
             }
-            let name = entry.file_name().to_string_lossy();
-            if entry.depth() > 0
-                && (name == ".git"
-                    || cfg.skip_dir_names.iter().any(|s| s.as_str() == name)
-                    || cfg.is_skipped_path(entry.path()))
-            {
+            if entry.depth() > 0 && cfg.should_skip_dir(entry.path()) {
                 it.skip_current_dir();
                 continue;
             }
             dirs += 1;
             if dirs.is_multiple_of(500) {
-                on_progress(dirs);
+                on_progress(dirs, entry.path());
             }
             let path = entry.path();
             if path.join(".git").exists() && seen.insert(path.to_path_buf()) {
@@ -161,7 +157,12 @@ pub fn start(
                 send(ScanEvent::Found(p.clone()));
                 let _ = work_tx.send(p);
             },
-            |dirs| send(ScanEvent::Progress { dirs }),
+            |dirs, current| {
+                send(ScanEvent::Progress {
+                    dirs,
+                    current: current.to_path_buf(),
+                })
+            },
         );
         drop(work_tx);
         for w in workers {
@@ -223,7 +224,7 @@ mod tests {
             ..Config::default()
         };
         let mut found = Vec::new();
-        find_repos(&cfg, &AtomicBool::new(false), |p| found.push(p), |_| {});
+        find_repos(&cfg, &AtomicBool::new(false), |p| found.push(p), |_, _| {});
         found.sort();
         let rel: Vec<_> = found
             .iter()
