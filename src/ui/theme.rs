@@ -40,6 +40,7 @@ pub fn verdict_color(v: Verdict) -> Rgba {
     match v {
         Verdict::SafeToRemove => GREEN,
         Verdict::UnsavedWork => ORANGE,
+        Verdict::Unreadable => RED,
         Verdict::StrayActive => BLUE,
         Verdict::InProject => MUTED,
         Verdict::Checking => FAINT,

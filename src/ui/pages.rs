@@ -676,6 +676,7 @@ impl AgentCleanup {
                         .child(div().font_weight(FontWeight::SEMIBOLD).child("What the statuses mean"))
                         .child(status(Verdict::SafeToRemove))
                         .child(status(Verdict::UnsavedWork))
+                        .child(status(Verdict::Unreadable))
                         .child(status(Verdict::StrayActive))
                         .child(status(Verdict::InProject)),
                 )
@@ -978,7 +979,10 @@ impl AgentCleanup {
                             "inside one of your project folders".to_string()
                         } else {
                             match &r.git {
-                                None => "git couldn't read it".to_string(),
+                                None => match &r.error {
+                                    Some(e) => format!("git couldn't read it: {e}"),
+                                    None => "git couldn't read it".to_string(),
+                                },
                                 Some(g) if g.has_local_work() => g.local_work_reasons().join(", "),
                                 // Everything is pushed; it was just used recently.
                                 Some(_) => r

@@ -19,6 +19,7 @@ pub fn verdict_icon(v: Verdict) -> IconName {
     match v {
         Verdict::SafeToRemove => IconName::CircleCheck,
         Verdict::UnsavedWork => IconName::TriangleAlert,
+        Verdict::Unreadable => IconName::CircleQuestionMark,
         Verdict::StrayActive => IconName::Clock,
         Verdict::InProject => IconName::FolderHeart,
         Verdict::Checking => IconName::Hourglass,
