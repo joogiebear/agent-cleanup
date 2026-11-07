@@ -1,6 +1,6 @@
 [package]
 name = "agent-cleanup"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Finds and cleans up clutter left behind by AI coding agents: stray clones, stale repos and files outside your projects."
 

@@ -17,7 +17,7 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
-The left rail switches between **Leftovers**, **Agent trail**, **Build junk**, **Updates**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
+The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **Build junk**, **Updates**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
 
 ![Details panel](docs/details.png)
 
@@ -28,6 +28,20 @@ Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sess
 Files an agent only *changed* (say, your `.bashrc`), files that are older than the session, and clones with unsaved git work are marked **Check first**. They need a tick before they can be recycled, and **Clean up** leaves them out.
 
 ![Agent trail](docs/trail.png)
+
+## Downloads
+
+The **Downloads** page lists what arrived in your Downloads folder in the last 90 days and guesses which project each one was for, from what was going on when it landed:
+
+- an agent session downloaded that exact file (always a match);
+- you committed, checked out or pulled in a repo within two hours of it (read from `.git/logs/HEAD`);
+- Claude Code or Codex was working in a project around then.
+
+Closer events count more. A project needs a clear lead over the next one, otherwise the file goes under **No clear project** rather than getting a wrong guess. Each row says why it matched, like "You used git there 4 min before it arrived".
+
+**Move into project** moves the file into the project's folder (it won't overwrite anything there, and won't copy across drives). Undo moves it back. You can also recycle a download, hide it, or show it in File Explorer.
+
+![Downloads](docs/downloads.png)
 
 ## Build junk
 
@@ -83,8 +97,9 @@ Bump `version` in `Cargo.toml` and merge to `main`. The Release workflow builds 
 
 ## Roadmap
 
-1. **Downloads matched to projects:** link files in Downloads to the project you were working on when they arrived.
-2. A scheduled background scan and a tray icon.
+1. A weekly background check from the tray, with a notification when there's something to clean.
+2. Leftover Claude Code and Codex session data for projects that no longer exist.
+3. Duplicate clones of the same repo.
 
 ## Development
 
@@ -95,4 +110,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).

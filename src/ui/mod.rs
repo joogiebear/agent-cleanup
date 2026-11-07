@@ -7,6 +7,7 @@
 mod app;
 mod assets;
 mod details;
+mod downloads;
 mod junk;
 mod leftovers;
 mod pages;
