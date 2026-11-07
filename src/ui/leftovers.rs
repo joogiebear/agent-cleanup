@@ -21,6 +21,7 @@ fn filter_icon(f: Filter) -> (IconName, Rgba) {
         Filter::Strays => (IconName::FolderSearch, ACCENT),
         Filter::SafeToRemove => (IconName::CircleCheck, GREEN),
         Filter::UnsavedWork => (IconName::TriangleAlert, ORANGE),
+        Filter::Unreadable => (IconName::CircleQuestionMark, RED),
         Filter::StrayActive => (IconName::Clock, BLUE),
         Filter::All => (IconName::Folders, MUTED),
     }

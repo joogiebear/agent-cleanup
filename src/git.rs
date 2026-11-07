@@ -3,7 +3,7 @@
 //! Using the user's own git keeps the binary small and matches exactly what
 //! they see in a terminal.
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -115,8 +115,11 @@ fn run<'a>(
     let mut cmd = Command::new("git");
     // safe.directory: read repos owned by other accounts (common for clones made
     // by tools running elevated) instead of failing with "dubious ownership".
+    // core.longpaths: read repos with paths past Windows' 260-character limit.
     cmd.arg("-c")
         .arg("safe.directory=*")
+        .arg("-c")
+        .arg("core.longpaths=true")
         .arg("-C")
         .arg(repo)
         .args(args);
@@ -137,7 +140,61 @@ fn run<'a>(
     })
 }
 
+/// Why git can't read `repo`, in plain words, if the `.git` itself shows it.
+fn broken_dot_git(repo: &Path) -> Option<String> {
+    let dot = repo.join(".git");
+    let meta = std::fs::metadata(&dot).ok()?;
+    if meta.is_file() {
+        let text = std::fs::read_to_string(&dot).unwrap_or_default();
+        let Some(target) = text.trim().strip_prefix("gitdir:").map(str::trim) else {
+            return Some("its .git is a file that doesn't point to a repo".to_string());
+        };
+        let target = repo.join(target);
+        if !target.exists() {
+            return Some(format!(
+                "it's a worktree or submodule, and the repo it belongs to is gone ({})",
+                target.display()
+            ));
+        }
+        None
+    } else if !dot.join("HEAD").exists() {
+        Some("its .git folder is incomplete, probably a partial copy".to_string())
+    } else {
+        None
+    }
+}
+
+/// git's error output boiled down to one readable line.
+pub fn explain_git_error(stderr: &str) -> String {
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
+        .or_else(|| stderr.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("git gave no reason");
+    let msg = line
+        .trim_start_matches("fatal:")
+        .trim_start_matches("error:")
+        .trim();
+    let lower = msg.to_lowercase();
+    if lower.contains("not a git repository") {
+        format!("git says it isn't a repo ({msg})")
+    } else if lower.contains("filename too long") {
+        "some paths are too long for Windows".to_string()
+    } else if lower.contains("index file")
+        || lower.contains("bad object")
+        || lower.contains("corrupt")
+    {
+        format!("the repo is damaged ({msg})")
+    } else {
+        msg.to_string()
+    }
+}
+
 pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
+    if let Some(why) = broken_dot_git(repo) {
+        bail!("{why}");
+    }
     let status = git(
         repo,
         &[
@@ -147,7 +204,7 @@ pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
             "--untracked-files=normal",
         ],
     )
-    .context("git status failed")?;
+    .map_err(|e| anyhow::anyhow!("{}", explain_git_error(&e.to_string())))?;
     let (branch, changed_files) = parse_status_v2(&status);
 
     let remotes = git(repo, &["remote", "-v"]).unwrap_or_default();
@@ -263,6 +320,31 @@ mod tests {
         assert!(
             GitState::default().has_local_work(),
             "no remote counts as local work"
+        );
+    }
+
+    #[test]
+    fn explains_broken_repos() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A worktree whose main repo was deleted.
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+        let e = inspect(&wt).unwrap_err().to_string();
+        assert!(e.contains("the repo it belongs to is gone"), "{e}");
+        // A .git folder copied without its contents.
+        let half = tmp.path().join("half");
+        std::fs::create_dir_all(half.join(".git")).unwrap();
+        let e = inspect(&half).unwrap_err().to_string();
+        assert!(e.contains("incomplete"), "{e}");
+
+        assert_eq!(
+            explain_git_error("warning: x\nfatal: not a git repository: 'C:/a/.git/worktrees/b'\n"),
+            "git says it isn't a repo (not a git repository: 'C:/a/.git/worktrees/b')"
+        );
+        assert_eq!(
+            explain_git_error("error: unable to stat 'x': Filename too long"),
+            "some paths are too long for Windows"
         );
     }
 }
