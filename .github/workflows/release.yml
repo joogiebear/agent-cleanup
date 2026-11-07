@@ -1,15 +1,16 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the Windows .exe and publish it as a GitHub Release.
+# Publish a release on GitHub (Releases > Draft a new release, with a tag like v0.2.0)
+# and this builds the Windows .exe and attaches it to that release.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build-exe:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +20,11 @@ jobs:
         run: cargo test
       - name: Build release .exe
         run: cargo build --release
-      - name: Publish release
+      - name: Attach .exe to the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/release/agent-cleanup.exe "agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe"
-          gh release create "$GITHUB_REF_NAME" "agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe" \
-            --title "Agent Cleanup $GITHUB_REF_NAME" --generate-notes
+          name="agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe"
+          cp target/release/agent-cleanup.exe "$name"
+          gh release upload "$GITHUB_REF_NAME" "$name" --clobber
