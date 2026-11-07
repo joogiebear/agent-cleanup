@@ -48,6 +48,9 @@ gpui_kit::assets::icon_assets!(
         FileMusic,
         FilePlay,
         Disc,
+        Ghost,
+        FolderX,
+        BotOff,
     ]
 );
 
