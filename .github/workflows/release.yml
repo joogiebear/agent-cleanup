@@ -1,30 +1,55 @@
 name: Release
 
-# Publish a release on GitHub (Releases > Draft a new release, with a tag like v0.2.0)
-# and this builds the Windows .exe and attaches it to that release.
+# Every push to main checks the version in Cargo.toml. If there's no GitHub
+# Release for that version yet, it builds the Windows .exe and publishes
+# release vX.Y.Z with the .exe attached. To ship a new version, bump
+# `version` in Cargo.toml and merge.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-exe:
+  release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Test
-        run: cargo test
-      - name: Build release .exe
-        run: cargo build --release
-      - name: Attach .exe to the release
+      - name: Check whether this version is already released
+        id: version
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          name="agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe"
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.exists == 'false'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.version.outputs.exists == 'false'
+        uses: Swatinem/rust-cache@v2
+      - name: Test
+        if: steps.version.outputs.exists == 'false'
+        run: cargo test
+      - name: Build release .exe
+        if: steps.version.outputs.exists == 'false'
+        run: cargo build --release
+      - name: Publish release
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          name="agent-cleanup-${TAG}-windows-x64.exe"
           cp target/release/agent-cleanup.exe "$name"
-          gh release upload "$GITHUB_REF_NAME" "$name" --clobber
+          gh release create "$TAG" "$name" --target "$GITHUB_SHA" \
+            --title "Agent Cleanup $TAG" --generate-notes \
+            --notes "Download \`$name\` below and run it. No installer is needed. Requires Git for Windows. SmartScreen may warn because the .exe isn't code-signed: click **More info**, then **Run anyway**."
