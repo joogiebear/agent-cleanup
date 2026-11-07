@@ -37,6 +37,8 @@ gpui_kit::assets::icon_assets!(
         FilePen,
         RefreshCw,
         Package,
+        CircleArrowUp,
+        SquareTerminal,
     ]
 );
 
