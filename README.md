@@ -59,6 +59,10 @@ The **Updates** page shows outdated packages in your projects, using each tool's
 
 ![Updates](docs/updates.png)
 
+## Weekly check
+
+Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app once a week (Mondays, or the next time the PC is on, never on battery) without opening a window. It scans like the app does and saves the results, then shows a notification if there's at least 100 MB or an old repo to clean, for example "2 old repos safe to remove (300 MB), 1.2 GB of build folders in idle projects". Clicking it opens the app. The check never moves anything, nothing stays running between checks, and it only counts things the app would mark safe. **Run now** tries it straight away. Turning the switch off removes the task.
+
 ## Cleaning up
 
 - **Clean up** recycles every repo marked safe in one go. You can also recycle one repo from its card (hover for the buttons), or tick several and choose **Recycle selected**.
@@ -97,9 +101,8 @@ Bump `version` in `Cargo.toml` and merge to `main`. The Release workflow builds 
 
 ## Roadmap
 
-1. A weekly background check from the tray, with a notification when there's something to clean.
-2. Leftover Claude Code and Codex session data for projects that no longer exist.
-3. Duplicate clones of the same repo.
+1. Leftover Claude Code and Codex session data for projects that no longer exist.
+2. Duplicate clones of the same repo.
 
 ## Development
 
@@ -110,4 +113,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).

@@ -27,7 +27,10 @@ impl Entry {
                 } else if let Some(from) = other.strip_prefix("moved back from ") {
                     format!("Moved back from {from}")
                 } else {
-                    other.to_string()
+                    let mut c = other.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().chain(c).collect())
+                        .unwrap_or_default()
                 }
             }
         }
