@@ -4,6 +4,7 @@
 //! on the Leftovers page), the page itself, and a details panel for the
 //! selected repo. Overlays (confirm dialog, toast) sit on top.
 
+mod agentdata;
 mod app;
 mod assets;
 mod details;
