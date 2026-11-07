@@ -9,6 +9,7 @@ pub mod check;
 pub mod config;
 pub mod deps;
 pub mod downloads;
+pub mod dupes;
 pub mod git;
 pub mod junk;
 pub mod library;

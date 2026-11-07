@@ -51,6 +51,8 @@ gpui_kit::assets::icon_assets!(
         Ghost,
         FolderX,
         BotOff,
+        BadgeCheck,
+        Pin,
     ]
 );
 
