@@ -8,6 +8,7 @@ use agent_cleanup::cache::ScanCache;
 use agent_cleanup::config::Config;
 use agent_cleanup::config::path_within;
 use agent_cleanup::deps::{self, Eco};
+use agent_cleanup::downloads::{self, Download};
 use agent_cleanup::junk;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
@@ -33,6 +34,7 @@ const POLL: Duration = Duration::from_millis(60);
 pub enum Page {
     Leftovers,
     Trail,
+    Downloads,
     Junk,
     Updates,
     Projects,
@@ -69,6 +71,8 @@ pub struct Notice {
     pub undo_trail: Vec<Item>,
     /// Build folders that were just recycled.
     pub undo_junk: Vec<junk::Item>,
+    /// Downloads that were just recycled (`None`) or moved (`Some(to)`).
+    pub undo_downloads: Vec<(Download, Option<PathBuf>)>,
 }
 
 /// Which page's things a confirm dialog is about.
@@ -77,6 +81,7 @@ pub enum ConfirmFor {
     Repos,
     Trail,
     Junk,
+    Downloads,
 }
 
 pub struct Confirm {
@@ -121,6 +126,15 @@ pub struct JunkJob {
     pub failed: Vec<String>,
 }
 
+/// The Downloads folder, listed and matched in the background.
+#[derive(Default)]
+pub struct Downloads {
+    pub items: Vec<Download>,
+    pub loading: Option<(Receiver<Vec<Download>>, Arc<AtomicBool>)>,
+    pub loaded: bool,
+    pub dir: Option<PathBuf>,
+}
+
 /// The agent trail page's data, read in the background.
 #[derive(Default)]
 pub struct Trail {
@@ -152,6 +166,7 @@ pub struct AgentCleanup {
     pub update_dismissed: bool,
     pub activity: Vec<Entry>,
     pub trail: Trail,
+    pub downloads: Downloads,
     pub junk: Junk,
     pub deps: Deps,
     pub list_scroll: UniformListScrollHandle,
@@ -200,6 +215,10 @@ impl AgentCleanup {
             update_dismissed: false,
             activity: Vec::new(),
             trail: Trail::default(),
+            downloads: Downloads {
+                dir: downloads::downloads_dir(),
+                ..Downloads::default()
+            },
             junk: Junk::default(),
             deps: Deps::default(),
             list_scroll: UniformListScrollHandle::new(),
@@ -242,6 +261,7 @@ impl AgentCleanup {
             undo: Vec::new(),
             undo_trail: Vec::new(),
             undo_junk: Vec::new(),
+            undo_downloads: Vec::new(),
         });
     }
 
@@ -269,8 +289,11 @@ impl AgentCleanup {
     /// Runs every [`POLL`]: picks up scan results, update progress and
     /// expires the notice. Only redraws when something changed.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        let mut changed =
-            self.poll_scan() | self.poll_trail() | self.poll_junk() | self.poll_deps();
+        let mut changed = self.poll_scan()
+            | self.poll_trail()
+            | self.poll_downloads()
+            | self.poll_junk()
+            | self.poll_deps();
         if self.junk.loading.is_some() || self.deps.loading.is_some() {
             changed = true; // progress counter
         }
@@ -410,6 +433,9 @@ impl AgentCleanup {
         if page == Page::Trail && !self.trail.loaded && self.trail.loading.is_none() {
             self.load_trail();
         }
+        if page == Page::Downloads && !self.downloads.loaded && self.downloads.loading.is_none() {
+            self.load_downloads();
+        }
         if page == Page::Junk && !self.junk.loaded && self.junk.loading.is_none() {
             self.load_junk();
         }
@@ -435,6 +461,16 @@ impl AgentCleanup {
                 paths,
                 ack: false,
                 what: ConfirmFor::Trail,
+            });
+        }
+    }
+
+    pub fn ask_recycle_downloads(&mut self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() {
+            self.confirm = Some(Confirm {
+                paths,
+                ack: false,
+                what: ConfirmFor::Downloads,
             });
         }
     }
@@ -687,8 +723,131 @@ impl AgentCleanup {
                 undo: Vec::new(),
                 undo_trail: Vec::new(),
                 undo_junk: job.done,
+                undo_downloads: Vec::new(),
             });
         }
+    }
+
+    // ---- downloads -----------------------------------------------------
+
+    pub fn load_downloads(&mut self) {
+        if let Some((_, cancel)) = &self.downloads.loading {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let Some(dir) = self.downloads.dir.clone() else {
+            self.downloads.loaded = true;
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (cfg, home, stop) = (self.cfg.clone(), self.home.clone(), cancel.clone());
+        let repos: Vec<PathBuf> = self.lib.repos().iter().map(|r| r.path.clone()).collect();
+        std::thread::spawn(move || {
+            let _ = tx.send(downloads::find(&dir, home.as_deref(), &repos, &cfg, &stop));
+        });
+        self.downloads.loading = Some((rx, cancel));
+    }
+
+    fn poll_downloads(&mut self) -> bool {
+        let Some((rx, _)) = &self.downloads.loading else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(items) => {
+                self.downloads.items = items;
+                self.downloads.loaded = true;
+                self.downloads.loading = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.downloads.loading = None;
+                self.downloads.loaded = true;
+                true
+            }
+        }
+    }
+
+    pub fn download_item(&self, p: &Path) -> Option<&Download> {
+        self.downloads.items.iter().find(|d| d.path == p)
+    }
+
+    pub fn hide_download(&mut self, p: PathBuf) {
+        self.downloads.items.retain(|d| d.path != p);
+        self.notify_text(
+            format!("Hidden {}. Unhide it on the Projects page.", self.short(&p)),
+            false,
+        );
+        self.cfg.ignored.push(p);
+        self.save_config();
+    }
+
+    /// Moves a download into the project it matched. Undo moves it back.
+    pub fn move_download(&mut self, p: &Path) {
+        let Some(d) = self.download_item(p).cloned() else {
+            return;
+        };
+        let Some(m) = d.matched.clone() else {
+            return;
+        };
+        match downloads::move_into(&d.path, &m.project) {
+            Ok(to) => {
+                self.downloads.items.retain(|x| x.path != d.path);
+                let text = format!("Moved {} into {}.", d.name(), self.short(&m.project));
+                self.notice = Some(Notice {
+                    text,
+                    is_error: false,
+                    shown_at: Instant::now(),
+                    undo: Vec::new(),
+                    undo_trail: Vec::new(),
+                    undo_junk: Vec::new(),
+                    undo_downloads: vec![(d, Some(to))],
+                });
+            }
+            Err(e) => self.notify_text(format!("Couldn't move {}: {e}.", d.name()), true),
+        }
+    }
+
+    pub fn recycle_downloads(&mut self, paths: &[PathBuf]) {
+        let mut moved = Vec::new();
+        let mut failed = Vec::new();
+        for p in paths {
+            let Some(d) = self.download_item(p).cloned() else {
+                continue;
+            };
+            match actions::recycle(p) {
+                Ok(()) => moved.push(d),
+                Err(e) => failed.push(format!("{} ({e})", d.name())),
+            }
+        }
+        self.downloads
+            .items
+            .retain(|d| !moved.iter().any(|m| m.path == d.path));
+        let freed: u64 = moved.iter().map(|d| d.size_bytes).sum();
+        let mut text = match moved.len() {
+            0 => String::new(),
+            1 => format!(
+                "Moved {} to the Recycle Bin, freeing {}.",
+                moved[0].name(),
+                human_size(freed)
+            ),
+            n => format!(
+                "Moved {n} downloads to the Recycle Bin, freeing {}.",
+                human_size(freed)
+            ),
+        };
+        if !failed.is_empty() {
+            text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
+        }
+        self.notice = Some(Notice {
+            text: text.trim().to_string(),
+            is_error: !failed.is_empty(),
+            shown_at: Instant::now(),
+            undo: Vec::new(),
+            undo_trail: Vec::new(),
+            undo_junk: Vec::new(),
+            undo_downloads: moved.into_iter().map(|d| (d, None)).collect(),
+        });
     }
 
     // ---- agent trail ---------------------------------------------------
@@ -792,6 +951,7 @@ impl AgentCleanup {
             undo: Vec::new(),
             undo_trail: moved,
             undo_junk: Vec::new(),
+            undo_downloads: Vec::new(),
         });
     }
 
@@ -949,6 +1109,7 @@ impl AgentCleanup {
             undo: moved,
             undo_trail: Vec::new(),
             undo_junk: Vec::new(),
+            undo_downloads: Vec::new(),
         });
     }
 
@@ -959,7 +1120,10 @@ impl AgentCleanup {
         if !notice.undo_junk.is_empty() {
             let items = std::mem::take(&mut notice.undo_junk);
             self.start_junk_job(items, true);
-            if notice.undo.is_empty() && notice.undo_trail.is_empty() {
+            if notice.undo.is_empty()
+                && notice.undo_trail.is_empty()
+                && notice.undo_downloads.is_empty()
+            {
                 return;
             }
         }
@@ -985,6 +1149,22 @@ impl AgentCleanup {
                 Err(e) => failed.push(format!("{} ({e})", item.name())),
             }
         }
+        for (d, moved_to) in notice.undo_downloads {
+            let res = match &moved_to {
+                Some(to) => downloads::move_back(to, &d.path),
+                None => actions::restore(&d.path),
+            };
+            match res {
+                Ok(()) => {
+                    restored += 1;
+                    self.downloads.items.push(d);
+                }
+                Err(e) => failed.push(format!("{} ({e})", d.name())),
+            }
+        }
+        self.downloads
+            .items
+            .sort_by_key(|d| std::cmp::Reverse(d.arrived));
         self.trail.items.sort_by_key(|i| std::cmp::Reverse(i.when));
         self.save_cache();
         if failed.is_empty() {
@@ -1068,6 +1248,12 @@ impl AgentCleanup {
                 Page::Trail,
             ))
             .child(item(
+                "nav-downloads",
+                IconName::Download,
+                "Downloads: what's in your Downloads folder, matched to projects",
+                Page::Downloads,
+            ))
+            .child(item(
                 "nav-junk",
                 IconName::Package,
                 "Build junk: dependency and build folders one command can recreate",
@@ -1132,6 +1318,7 @@ impl Render for AgentCleanup {
             match self.page {
                 Page::Leftovers => self.leftovers_page(window, cx).into_any_element(),
                 Page::Trail => self.trail_page(cx).into_any_element(),
+                Page::Downloads => self.downloads_page(cx).into_any_element(),
                 Page::Junk => self.junk_page(cx).into_any_element(),
                 Page::Updates => self.updates_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),
