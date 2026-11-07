@@ -39,6 +39,15 @@ gpui_kit::assets::icon_assets!(
         Package,
         CircleArrowUp,
         SquareTerminal,
+        FolderInput,
+        FolderClosed,
+        FileArchive,
+        FileImage,
+        FileCode,
+        FileSpreadsheet,
+        FileMusic,
+        FilePlay,
+        Disc,
     ]
 );
 

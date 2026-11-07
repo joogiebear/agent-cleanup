@@ -2,6 +2,7 @@
 //! overlays (update banner, toast, confirm dialog).
 
 use super::app::{AgentCleanup, ConfirmFor, Page, UpdateState};
+use super::downloads::download_icon;
 use super::theme::*;
 use super::trail::trail_icon;
 use super::widgets::*;
@@ -634,6 +635,7 @@ impl AgentCleanup {
                         .child(status(Verdict::InProject)),
                 )
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
+                .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
@@ -740,7 +742,10 @@ impl AgentCleanup {
     pub fn toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let n = self.notice.as_ref()?;
         let color = if n.is_error { RED } else { GREEN };
-        let can_undo = !n.undo.is_empty() || !n.undo_trail.is_empty() || !n.undo_junk.is_empty();
+        let can_undo = !n.undo.is_empty()
+            || !n.undo_trail.is_empty()
+            || !n.undo_junk.is_empty()
+            || !n.undo_downloads.is_empty();
         Some(
             div()
                 .absolute()
@@ -832,6 +837,18 @@ impl AgentCleanup {
                     }
                 })
                 .collect()
+        } else if c.what == ConfirmFor::Downloads {
+            c.paths
+                .iter()
+                .filter_map(|p| self.download_item(p))
+                .map(|d| Row {
+                    name: d.name(),
+                    size: Some(d.size_bytes),
+                    icon: download_icon(d),
+                    color: MUTED,
+                    risk: None,
+                })
+                .collect()
         } else if c.what == ConfirmFor::Trail {
             c.paths
                 .iter()
@@ -886,6 +903,7 @@ impl AgentCleanup {
             ConfirmFor::Repos => "repos",
             ConfirmFor::Trail => "items",
             ConfirmFor::Junk => "folders",
+            ConfirmFor::Downloads => "downloads",
         };
         let title = if rows.len() == 1 {
             format!("Move \"{}\" to the Recycle Bin?", rows[0].name)
@@ -897,6 +915,12 @@ impl AgentCleanup {
                 "Each one is rebuilt by a single command, like npm install or cargo build. Empty the Recycle Bin afterwards to get the space back.",
                 "These projects are still in use:",
                 "I'll rebuild these when I need them",
+            )
+        } else if c.what == ConfirmFor::Downloads {
+            (
+                "Nothing outside your Downloads folder uses these. Empty the Recycle Bin afterwards to get the space back.",
+                "",
+                "",
             )
         } else if c.what == ConfirmFor::Trail {
             (
@@ -970,6 +994,7 @@ impl AgentCleanup {
                         ConfirmFor::Repos => this.recycle(&c.paths),
                         ConfirmFor::Trail => this.recycle_trail(&c.paths),
                         ConfirmFor::Junk => this.recycle_junk(&c.paths),
+                        ConfirmFor::Downloads => this.recycle_downloads(&c.paths),
                     }
                 }
                 cx.notify();
