@@ -20,6 +20,15 @@ pub struct Config {
     pub skip_paths: Vec<PathBuf>,
     /// A repo with no activity for this many days counts as stale.
     pub stale_after_days: u32,
+    /// Only look inside `AppData\Local\Temp` (where tools put throwaway
+    /// clones) instead of all of AppData, which is huge and full of app data.
+    pub appdata_temp_only: bool,
+    /// Look for a newer release on GitHub when the app starts.
+    pub check_for_updates: bool,
+    /// The AppData folder `appdata_temp_only` applies to. Not saved; derived
+    /// from the home folder.
+    #[serde(skip)]
+    pub appdata_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -37,7 +46,7 @@ impl Default for Config {
             .collect();
         Self {
             project_roots: Vec::new(),
-            scan_roots: home.into_iter().collect(),
+            scan_roots: home.iter().cloned().collect(),
             ignored: Vec::new(),
             skip_dir_names: [
                 "node_modules",
@@ -59,6 +68,9 @@ impl Default for Config {
             .collect(),
             skip_paths,
             stale_after_days: 14,
+            appdata_temp_only: true,
+            check_for_updates: true,
+            appdata_dir: home.as_ref().map(|h| h.join("AppData")),
         }
     }
 }
@@ -103,6 +115,34 @@ impl Config {
 
     pub fn is_skipped_path(&self, path: &Path) -> bool {
         self.skip_paths.iter().any(|s| same_path(s, path))
+    }
+
+    /// Whether the scanner should skip this folder (and everything under it).
+    pub fn should_skip_dir(&self, path: &Path) -> bool {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        if name == ".git" || self.skip_dir_names.iter().any(|s| s.as_str() == name) {
+            return true;
+        }
+        if self.is_skipped_path(path) {
+            return true;
+        }
+        if self.appdata_temp_only
+            && let Some(appdata) = &self.appdata_dir
+            && let Some(parent) = path.parent()
+        {
+            let local = appdata.join("Local");
+            // Inside AppData only `Local`, and inside that only `Temp`, are scanned.
+            if same_path(parent, appdata) && !name.eq_ignore_ascii_case("Local") {
+                return true;
+            }
+            if same_path(parent, &local) && !name.eq_ignore_ascii_case("Temp") {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -160,10 +200,34 @@ mod tests {
     }
 
     #[test]
+    fn appdata_only_scans_temp() {
+        let cfg = Config {
+            appdata_dir: Some(PathBuf::from("/h/AppData")),
+            skip_paths: vec![],
+            ..Config::default()
+        };
+        assert!(cfg.should_skip_dir(Path::new("/h/AppData/Roaming")));
+        assert!(cfg.should_skip_dir(Path::new("/h/AppData/Local/Google")));
+        assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local")));
+        assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp")));
+        assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp/clone")));
+        assert!(cfg.should_skip_dir(Path::new("/h/code/app/node_modules")));
+        assert!(!cfg.should_skip_dir(Path::new("/h/code/app")));
+        let everything = Config {
+            appdata_temp_only: false,
+            ..cfg
+        };
+        assert!(!everything.should_skip_dir(Path::new("/h/AppData/Roaming")));
+    }
+
+    #[test]
     fn config_round_trips_and_tolerates_missing_fields() {
         let cfg = Config::default();
         let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
-        assert_eq!(cfg, back);
+        assert_eq!(
+            cfg, back,
+            "appdata_dir is re-derived from the home folder on load"
+        );
         let partial: Config = toml::from_str("stale_after_days = 30").unwrap();
         assert_eq!(partial.stale_after_days, 30);
         assert!(!partial.skip_dir_names.is_empty());
