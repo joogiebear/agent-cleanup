@@ -70,6 +70,19 @@ pub fn task_xml(exe: &Path) -> String {
     )
 }
 
+/// The program a task definition runs.
+pub fn task_exe(xml: &str) -> Option<std::path::PathBuf> {
+    let xml = xml.replace('\0', "");
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let end = start + xml[start..].find("</Command>")?;
+    let raw = xml[start..end]
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    Some(std::path::PathBuf::from(raw.trim().trim_matches('"')))
+}
+
 /// Whether a task definition (as `schtasks /Query /XML` prints it) runs `exe`.
 pub fn runs_exe(xml: &str, exe: &Path) -> bool {
     let want = format!(
@@ -128,6 +141,31 @@ mod imp {
         }
     }
 
+    /// If the task runs a copy of the app that no longer exists (the exe was
+    /// moved or renamed), points it at this copy. Returns whether it did.
+    pub fn repair_if_moved() -> bool {
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+        let Ok(out) = schtasks(&[
+            "/Query".as_ref(),
+            "/TN".as_ref(),
+            TASK_NAME.as_ref(),
+            "/XML".as_ref(),
+        ]) else {
+            return false;
+        };
+        if !out.status.success() {
+            return false;
+        }
+        let xml = String::from_utf8_lossy(&out.stdout);
+        let old = task_exe(&xml);
+        if runs_exe(&xml, &exe) || old.as_deref().is_none_or(Path::exists) {
+            return false;
+        }
+        enable().is_ok()
+    }
+
     pub fn enable() -> anyhow::Result<()> {
         let exe = std::env::current_exe()?;
         // Task Scheduler wants the file in UTF-16 with a byte order mark.
@@ -179,6 +217,10 @@ mod imp {
         Status::Unknown
     }
 
+    pub fn repair_if_moved() -> bool {
+        false
+    }
+
     pub fn enable() -> anyhow::Result<()> {
         anyhow::bail!("the weekly check uses Windows Task Scheduler")
     }
@@ -188,7 +230,7 @@ mod imp {
     }
 }
 
-pub use imp::{disable, enable, status};
+pub use imp::{disable, enable, repair_if_moved, status};
 
 #[cfg(test)]
 mod tests {
@@ -205,5 +247,6 @@ mod tests {
         // Windows paths are case-insensitive.
         assert!(runs_exe(&xml, Path::new(r"c:\tools\a&b\AGENT-CLEANUP.exe")));
         assert!(!runs_exe(&xml, Path::new(r"C:\Other\agent-cleanup.exe")));
+        assert_eq!(task_exe(&xml).as_deref(), Some(exe));
     }
 }

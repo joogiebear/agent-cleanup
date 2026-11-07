@@ -235,6 +235,8 @@ impl AgentCleanup {
         if app.cfg.check_for_updates {
             app.check_for_updates();
         }
+        // A moved exe would leave the weekly check pointing at nothing.
+        std::thread::spawn(agent_cleanup::schedule::repair_if_moved);
         if let Some(cache) = cache {
             app.cached_at = Some(cache.scanned_at);
             app.lib = Library::new(cache.repos);
