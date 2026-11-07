@@ -6,6 +6,8 @@ use agent_cleanup::actions;
 use agent_cleanup::activity::{self, Entry};
 use agent_cleanup::cache::ScanCache;
 use agent_cleanup::config::Config;
+use agent_cleanup::config::path_within;
+use agent_cleanup::junk;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
 use agent_cleanup::scan::{self, ScanEvent};
@@ -16,7 +18,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -30,6 +32,7 @@ const POLL: Duration = Duration::from_millis(60);
 pub enum Page {
     Leftovers,
     Trail,
+    Junk,
     Projects,
     Activity,
     Settings,
@@ -62,13 +65,42 @@ pub struct Notice {
     pub undo: Vec<Repo>,
     /// Agent trail items that were just recycled.
     pub undo_trail: Vec<Item>,
+    /// Build folders that were just recycled.
+    pub undo_junk: Vec<junk::Item>,
+}
+
+/// Which page's things a confirm dialog is about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmFor {
+    Repos,
+    Trail,
+    Junk,
 }
 
 pub struct Confirm {
     pub paths: Vec<PathBuf>,
     pub ack: bool,
-    /// The paths are agent trail items, not repos from the scan.
-    pub trail: bool,
+    pub what: ConfirmFor,
+}
+
+type JunkLoad = (Receiver<Vec<junk::Item>>, Arc<AtomicBool>, Arc<AtomicUsize>);
+
+/// Build folders, found and recycled on background threads (a big
+/// `node_modules` can take a while to move).
+#[derive(Default)]
+pub struct Junk {
+    pub items: Vec<junk::Item>,
+    pub loading: Option<JunkLoad>,
+    pub loaded: bool,
+    pub repos: usize,
+    /// A recycle or restore in progress, and what it says while it runs.
+    pub busy: Option<(Receiver<JunkJob>, String)>,
+}
+
+pub struct JunkJob {
+    pub restore: bool,
+    pub done: Vec<junk::Item>,
+    pub failed: Vec<String>,
 }
 
 /// The agent trail page's data, read in the background.
@@ -102,6 +134,7 @@ pub struct AgentCleanup {
     pub update_dismissed: bool,
     pub activity: Vec<Entry>,
     pub trail: Trail,
+    pub junk: Junk,
     pub list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -148,6 +181,7 @@ impl AgentCleanup {
             update_dismissed: false,
             activity: Vec::new(),
             trail: Trail::default(),
+            junk: Junk::default(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _poll: poll,
@@ -187,6 +221,7 @@ impl AgentCleanup {
             shown_at: Instant::now(),
             undo: Vec::new(),
             undo_trail: Vec::new(),
+            undo_junk: Vec::new(),
         });
     }
 
@@ -214,7 +249,10 @@ impl AgentCleanup {
     /// Runs every [`POLL`]: picks up scan results, update progress and
     /// expires the notice. Only redraws when something changed.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_scan() | self.poll_trail();
+        let mut changed = self.poll_scan() | self.poll_trail() | self.poll_junk();
+        if self.junk.loading.is_some() {
+            changed = true; // progress counter
+        }
         if let Some(n) = &self.notice
             && n.shown_at.elapsed() > Duration::from_secs(NOTICE_SECS)
         {
@@ -351,6 +389,9 @@ impl AgentCleanup {
         if page == Page::Trail && !self.trail.loaded && self.trail.loading.is_none() {
             self.load_trail();
         }
+        if page == Page::Junk && !self.junk.loaded && self.junk.loading.is_none() {
+            self.load_junk();
+        }
         self.page = page;
     }
 
@@ -359,7 +400,7 @@ impl AgentCleanup {
             self.confirm = Some(Confirm {
                 paths,
                 ack: false,
-                trail: false,
+                what: ConfirmFor::Repos,
             });
         }
     }
@@ -369,7 +410,180 @@ impl AgentCleanup {
             self.confirm = Some(Confirm {
                 paths,
                 ack: false,
-                trail: true,
+                what: ConfirmFor::Trail,
+            });
+        }
+    }
+
+    pub fn ask_recycle_junk(&mut self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() && self.junk.busy.is_none() {
+            self.confirm = Some(Confirm {
+                paths,
+                ack: false,
+                what: ConfirmFor::Junk,
+            });
+        }
+    }
+
+    // ---- build junk ----------------------------------------------------
+
+    pub fn load_junk(&mut self) {
+        if let Some((_, cancel, _)) = &self.junk.loading {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let repos: Vec<(PathBuf, Option<SystemTime>)> = self
+            .lib
+            .repos()
+            .iter()
+            .map(|r| (r.path.clone(), r.last_activity))
+            .collect();
+        self.junk.repos = repos.len();
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicUsize::new(0));
+        let (cfg, stop, count) = (self.cfg.clone(), cancel.clone(), done.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(junk::find(&repos, &cfg, &stop, &count));
+        });
+        self.junk.loading = Some((rx, cancel, done));
+    }
+
+    pub fn junk_progress(&self) -> usize {
+        self.junk
+            .loading
+            .as_ref()
+            .map_or(0, |(_, _, d)| d.load(Ordering::Relaxed))
+    }
+
+    pub fn junk_item(&self, p: &Path) -> Option<&junk::Item> {
+        self.junk.items.iter().find(|i| i.path == p)
+    }
+
+    fn poll_junk(&mut self) -> bool {
+        let mut changed = false;
+        if let Some((rx, _, _)) = &self.junk.loading {
+            match rx.try_recv() {
+                Ok(items) => {
+                    self.junk.items = items;
+                    self.junk.loaded = true;
+                    self.junk.loading = None;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.junk.loaded = true;
+                    self.junk.loading = None;
+                    changed = true;
+                }
+            }
+        }
+        let job = match &self.junk.busy {
+            Some((rx, _)) => match rx.try_recv() {
+                Ok(job) => Some(job),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(JunkJob {
+                    restore: false,
+                    done: Vec::new(),
+                    failed: vec!["the background task stopped".into()],
+                }),
+            },
+            None => None,
+        };
+        if let Some(job) = job {
+            self.junk.busy = None;
+            self.finish_junk_job(job);
+            changed = true;
+        }
+        changed
+    }
+
+    fn start_junk_job(&mut self, items: Vec<junk::Item>, restore: bool) {
+        if items.is_empty() || self.junk.busy.is_some() {
+            return;
+        }
+        let n = items.len();
+        let what = if n == 1 {
+            format!("{} from {}", items[0].name(), items[0].repo_name())
+        } else {
+            format!("{n} folders")
+        };
+        let label = if restore {
+            format!("Putting back {what}...")
+        } else {
+            format!("Moving {what} to the Recycle Bin. Big folders can take a minute.")
+        };
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut job = JunkJob {
+                restore,
+                done: Vec::new(),
+                failed: Vec::new(),
+            };
+            for it in items {
+                let res = if restore {
+                    actions::restore(&it.path)
+                } else {
+                    actions::recycle(&it.path)
+                };
+                match res {
+                    Ok(()) => job.done.push(it),
+                    Err(e) => job.failed.push(format!("{} ({e})", it.name())),
+                }
+            }
+            let _ = tx.send(job);
+        });
+        self.junk.busy = Some((rx, label));
+    }
+
+    pub fn recycle_junk(&mut self, paths: &[PathBuf]) {
+        let items: Vec<junk::Item> = paths
+            .iter()
+            .filter_map(|p| self.junk_item(p).cloned())
+            .collect();
+        self.start_junk_job(items, false);
+    }
+
+    fn finish_junk_job(&mut self, job: JunkJob) {
+        let n = job.done.len();
+        let bytes: u64 = job.done.iter().map(|i| i.size_bytes).sum();
+        let mut text = match (job.restore, n) {
+            (_, 0) => String::new(),
+            (true, n) => format!("Put back {n} folder{}.", if n == 1 { "" } else { "s" }),
+            (false, 1) => format!(
+                "Moved {} from {} to the Recycle Bin ({}). Empty the bin to get the space back.",
+                job.done[0].name(),
+                job.done[0].repo_name(),
+                human_size(bytes)
+            ),
+            (false, n) => format!(
+                "Moved {n} build folders to the Recycle Bin ({}). Empty the bin to get the space back.",
+                human_size(bytes)
+            ),
+        };
+        if !job.failed.is_empty() {
+            text.push_str(&format!(
+                " Couldn't {}: {}.",
+                if job.restore { "put back" } else { "move" },
+                job.failed.join(", ")
+            ));
+        }
+        if job.restore {
+            self.junk.items.extend(job.done);
+            self.junk
+                .items
+                .sort_by_key(|i| std::cmp::Reverse(i.size_bytes));
+            self.notify_text(text.trim(), !job.failed.is_empty());
+        } else {
+            self.junk
+                .items
+                .retain(|i| !job.done.iter().any(|d| d.path == i.path));
+            self.notice = Some(Notice {
+                text: text.trim().to_string(),
+                is_error: !job.failed.is_empty(),
+                shown_at: Instant::now(),
+                undo: Vec::new(),
+                undo_trail: Vec::new(),
+                undo_junk: job.done,
             });
         }
     }
@@ -474,6 +688,7 @@ impl AgentCleanup {
             shown_at: Instant::now(),
             undo: Vec::new(),
             undo_trail: moved,
+            undo_junk: Vec::new(),
         });
     }
 
@@ -595,6 +810,10 @@ impl AgentCleanup {
         }
         let moved = self.lib.remove(&moved_paths);
         self.trail.items.retain(|i| !moved_paths.contains(&i.path));
+        // Build folders inside a recycled repo went with it.
+        self.junk
+            .items
+            .retain(|i| !moved_paths.iter().any(|p| path_within(&i.path, p)));
         if self
             .focused
             .as_ref()
@@ -626,13 +845,21 @@ impl AgentCleanup {
             shown_at: Instant::now(),
             undo: moved,
             undo_trail: Vec::new(),
+            undo_junk: Vec::new(),
         });
     }
 
     pub fn undo(&mut self) {
-        let Some(notice) = self.notice.take() else {
+        let Some(mut notice) = self.notice.take() else {
             return;
         };
+        if !notice.undo_junk.is_empty() {
+            let items = std::mem::take(&mut notice.undo_junk);
+            self.start_junk_job(items, true);
+            if notice.undo.is_empty() && notice.undo_trail.is_empty() {
+                return;
+            }
+        }
         let mut failed = Vec::new();
         let mut restored = 0;
         for repo in notice.undo {
@@ -738,6 +965,12 @@ impl AgentCleanup {
                 Page::Trail,
             ))
             .child(item(
+                "nav-junk",
+                IconName::Package,
+                "Build junk: dependency and build folders one command can recreate",
+                Page::Junk,
+            ))
+            .child(item(
                 "nav-projects",
                 IconName::FolderHeart,
                 "Projects: the folders that hold your real work",
@@ -790,6 +1023,7 @@ impl Render for AgentCleanup {
             match self.page {
                 Page::Leftovers => self.leftovers_page(window, cx).into_any_element(),
                 Page::Trail => self.trail_page(cx).into_any_element(),
+                Page::Junk => self.junk_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),
                 Page::Activity => self.activity_page(cx).into_any_element(),
                 Page::Settings => self.settings_page(cx).into_any_element(),

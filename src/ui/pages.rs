@@ -1,12 +1,12 @@
 //! The other pages (welcome, projects, activity, settings, help) and the
 //! overlays (update banner, toast, confirm dialog).
 
-use super::app::{AgentCleanup, Page, UpdateState};
+use super::app::{AgentCleanup, ConfirmFor, Page, UpdateState};
 use super::theme::*;
 use super::trail::trail_icon;
 use super::widgets::*;
 use agent_cleanup::config::{Config, path_within};
-use agent_cleanup::model::{Verdict, human_size};
+use agent_cleanup::model::{Verdict, human_size, relative_time};
 use agent_cleanup::update;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::switch::Switch;
@@ -634,6 +634,7 @@ impl AgentCleanup {
                         .child(status(Verdict::InProject)),
                 )
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
+                .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
         )
     }
@@ -738,7 +739,7 @@ impl AgentCleanup {
     pub fn toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let n = self.notice.as_ref()?;
         let color = if n.is_error { RED } else { GREEN };
-        let can_undo = !n.undo.is_empty() || !n.undo_trail.is_empty();
+        let can_undo = !n.undo.is_empty() || !n.undo_trail.is_empty() || !n.undo_junk.is_empty();
         Some(
             div()
                 .absolute()
@@ -804,7 +805,33 @@ impl AgentCleanup {
             color: Rgba,
             risk: Option<String>,
         }
-        let rows: Vec<Row> = if c.trail {
+        let rows: Vec<Row> = if c.what == ConfirmFor::Junk {
+            let days = self.cfg.stale_after_days;
+            c.paths
+                .iter()
+                .filter_map(|p| self.junk_item(p))
+                .map(|it| {
+                    let idle = it.is_idle(days, now);
+                    Row {
+                        name: format!("{} in {}", it.name(), it.repo_name()),
+                        size: Some(it.size_bytes),
+                        icon: if idle {
+                            IconName::Package
+                        } else {
+                            IconName::Clock
+                        },
+                        color: if idle { GREEN } else { ORANGE },
+                        risk: (!idle).then(|| {
+                            let when = it
+                                .repo_activity
+                                .map(|t| format!("worked on {}", relative_time(t, now)))
+                                .unwrap_or_else(|| "no idea when it was last used".into());
+                            format!("{when}; you'd need to run {} again", it.kind.rebuild)
+                        }),
+                    }
+                })
+                .collect()
+        } else if c.what == ConfirmFor::Trail {
             c.paths
                 .iter()
                 .filter_map(|p| self.trail_item(p))
@@ -854,13 +881,23 @@ impl AgentCleanup {
         let risky: Vec<&Row> = rows.iter().filter(|r| r.risk.is_some()).collect();
         let needs_ack = !risky.is_empty();
         let can_go = !needs_ack || c.ack;
-        let noun = if c.trail { "items" } else { "repos" };
+        let noun = match c.what {
+            ConfirmFor::Repos => "repos",
+            ConfirmFor::Trail => "items",
+            ConfirmFor::Junk => "folders",
+        };
         let title = if rows.len() == 1 {
             format!("Move \"{}\" to the Recycle Bin?", rows[0].name)
         } else {
             format!("Move {} {noun} to the Recycle Bin?", rows.len())
         };
-        let (safe_text, warn_title, ack_text) = if c.trail {
+        let (safe_text, warn_title, ack_text) = if c.what == ConfirmFor::Junk {
+            (
+                "Each one is rebuilt by a single command, like npm install or cargo build. Empty the Recycle Bin afterwards to get the space back.",
+                "These projects are still in use:",
+                "I'll rebuild these when I need them",
+            )
+        } else if c.what == ConfirmFor::Trail {
             (
                 "An agent made all of these outside its project, and none hold unsaved git work.",
                 "Take a look at these first:",
@@ -928,10 +965,10 @@ impl AgentCleanup {
         let go_btn = if can_go {
             go_btn.on_click(cx.listener(|this, _, _, cx| {
                 if let Some(c) = this.confirm.take() {
-                    if c.trail {
-                        this.recycle_trail(&c.paths);
-                    } else {
-                        this.recycle(&c.paths);
+                    match c.what {
+                        ConfirmFor::Repos => this.recycle(&c.paths),
+                        ConfirmFor::Trail => this.recycle_trail(&c.paths),
+                        ConfirmFor::Junk => this.recycle_junk(&c.paths),
                     }
                 }
                 cx.notify();

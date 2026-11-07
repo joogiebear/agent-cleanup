@@ -17,7 +17,7 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
-The left rail switches between **Leftovers**, **Agent trail**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
+The left rail switches between **Leftovers**, **Agent trail**, **Build junk**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
 
 ![Details panel](docs/details.png)
 
@@ -28,6 +28,14 @@ Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sess
 Files an agent only *changed* (say, your `.bashrc`), files that are older than the session, and clones with unsaved git work are marked **Check first**. They need a tick before they can be recycled, and **Clean up** leaves them out.
 
 ![Agent trail](docs/trail.png)
+
+## Build junk
+
+The **Build junk** page looks inside the repos the scan found for dependency and build folders: `node_modules`, Rust `target`, Python venvs, `dist`/`build`/`.next` and other framework caches, Gradle and .NET output, and Python tool caches. A folder is only listed when git ignores it *and* the file that rebuilds it is next to it (`package.json` beside `node_modules`, `Cargo.toml` beside `target`, `pyvenv.cfg` inside a venv). So a `build` folder that holds real source never shows up.
+
+Each row says what brings it back (`npm install`, `cargo build`, ...). **Clean up** only takes folders from projects you haven't touched for the "stale" days set in Settings. Recycling one from a project you're still working on needs a tick first. Big folders move in the background so the window stays responsive. Windows refuses to recycle anything bigger than the Recycle Bin allows, so those stay where they are and the error says so. They are never permanently deleted.
+
+![Build junk](docs/junk.png)
 
 ## Cleaning up
 
@@ -68,8 +76,7 @@ Bump `version` in `Cargo.toml` and merge to `main`. The Release workflow builds 
 ## Roadmap
 
 1. **Downloads matched to projects:** link files in Downloads to the project you were working on when they arrived.
-2. **Build junk reclaim:** `node_modules`, `target`, `.venv` and `dist` in projects you haven't touched lately.
-3. A scheduled background scan and a tray icon.
+2. A scheduled background scan and a tray icon.
 
 ## Development
 

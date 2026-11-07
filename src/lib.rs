@@ -6,6 +6,7 @@ pub mod activity;
 pub mod cache;
 pub mod config;
 pub mod git;
+pub mod junk;
 pub mod library;
 pub mod model;
 pub mod scan;
