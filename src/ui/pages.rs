@@ -3,6 +3,7 @@
 
 use super::app::{AgentCleanup, Page, UpdateState};
 use super::theme::*;
+use super::trail::trail_icon;
 use super::widgets::*;
 use agent_cleanup::config::{Config, path_within};
 use agent_cleanup::model::{Verdict, human_size};
@@ -632,6 +633,7 @@ impl AgentCleanup {
                         .child(status(Verdict::StrayActive))
                         .child(status(Verdict::InProject)),
                 )
+                .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
         )
     }
@@ -736,7 +738,7 @@ impl AgentCleanup {
     pub fn toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let n = self.notice.as_ref()?;
         let color = if n.is_error { RED } else { GREEN };
-        let can_undo = !n.undo.is_empty();
+        let can_undo = !n.undo.is_empty() || !n.undo_trail.is_empty();
         Some(
             div()
                 .absolute()
@@ -794,61 +796,115 @@ impl AgentCleanup {
     pub fn confirm_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let c = self.confirm.as_ref()?;
         let now = SystemTime::now();
-        let repos: Vec<_> = c.paths.iter().filter_map(|p| self.lib.get(p)).collect();
-        let total: u64 = repos.iter().filter_map(|r| r.size_bytes).sum();
-        let risky: Vec<_> = repos
-            .iter()
-            .filter(|r| r.verdict(&self.cfg, now) != Verdict::SafeToRemove)
-            .collect();
+        // One row per thing to recycle, whatever page it came from.
+        struct Row {
+            name: String,
+            size: Option<u64>,
+            icon: IconName,
+            color: Rgba,
+            risk: Option<String>,
+        }
+        let rows: Vec<Row> = if c.trail {
+            c.paths
+                .iter()
+                .filter_map(|p| self.trail_item(p))
+                .map(|it| {
+                    let w = it.warnings();
+                    Row {
+                        name: it.name(),
+                        size: Some(it.size_bytes),
+                        icon: if w.is_empty() {
+                            trail_icon(it.kind)
+                        } else {
+                            IconName::TriangleAlert
+                        },
+                        color: if w.is_empty() { GREEN } else { ORANGE },
+                        risk: (!w.is_empty()).then(|| w.join(", ")),
+                    }
+                })
+                .collect()
+        } else {
+            c.paths
+                .iter()
+                .filter_map(|p| self.lib.get(p))
+                .map(|r| {
+                    let v = r.verdict(&self.cfg, now);
+                    let risk = (v != Verdict::SafeToRemove).then(|| {
+                        if !r.is_stray() {
+                            "inside one of your project folders".to_string()
+                        } else {
+                            r.git
+                                .as_ref()
+                                .map(|g| g.local_work_reasons().join(", "))
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or_else(|| "git couldn't read it".into())
+                        }
+                    });
+                    Row {
+                        name: r.name(),
+                        size: r.size_bytes,
+                        icon: verdict_icon(v),
+                        color: verdict_color(v),
+                        risk,
+                    }
+                })
+                .collect()
+        };
+        let total: u64 = rows.iter().filter_map(|r| r.size).sum();
+        let risky: Vec<&Row> = rows.iter().filter(|r| r.risk.is_some()).collect();
         let needs_ack = !risky.is_empty();
         let can_go = !needs_ack || c.ack;
-        let title = if repos.len() == 1 {
-            format!("Move \"{}\" to the Recycle Bin?", repos[0].name())
+        let noun = if c.trail { "items" } else { "repos" };
+        let title = if rows.len() == 1 {
+            format!("Move \"{}\" to the Recycle Bin?", rows[0].name)
         } else {
-            format!("Move {} repos to the Recycle Bin?", repos.len())
+            format!("Move {} {noun} to the Recycle Bin?", rows.len())
+        };
+        let (safe_text, warn_title, ack_text) = if c.trail {
+            (
+                "An agent made all of these outside its project, and none hold unsaved git work.",
+                "Take a look at these first:",
+                "I've checked these and they can go",
+            )
+        } else {
+            (
+                "Everything is committed and pushed, so you can clone it again any time.",
+                "Some work here isn't saved anywhere else:",
+                "I understand this work only exists on this PC",
+            )
         };
 
         let mut list = v_flex().gap_1();
-        for r in repos.iter().take(8) {
-            let v = r.verdict(&self.cfg, now);
+        for r in rows.iter().take(8) {
             list = list.child(
                 h_flex()
                     .gap_2()
-                    .child(icon(verdict_icon(v), 14., verdict_color(v)))
-                    .child(div().flex_1().min_w_0().truncate().child(r.name()))
+                    .child(icon(r.icon, 14., r.color))
+                    .child(div().flex_1().min_w_0().truncate().child(r.name.clone()))
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(FAINT)
-                            .child(r.size_bytes.map(human_size).unwrap_or_default()),
+                            .child(r.size.map(human_size).unwrap_or_default()),
                     ),
             );
         }
-        if repos.len() > 8 {
+        if rows.len() > 8 {
             list = list.child(
                 div()
                     .text_size(px(12.))
                     .text_color(FAINT)
-                    .child(format!("...and {} more", repos.len() - 8)),
+                    .child(format!("...and {} more", rows.len() - 8)),
             );
         }
 
         let mut warn = v_flex().gap_1();
         for r in risky.iter().take(6) {
-            let why = if !r.is_stray() {
-                "inside one of your project folders".to_string()
-            } else {
-                r.git
-                    .as_ref()
-                    .map(|g| g.local_work_reasons().join(", "))
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "git couldn't read it".into())
-            };
-            warn = warn.child(
-                div()
-                    .text_size(px(13.))
-                    .child(format!("{}: {why}", r.name())),
-            );
+            warn = warn.child(div().text_size(px(13.)).child(format!(
+                "{}: {}",
+                r.name,
+                r.risk.clone().unwrap_or_default()
+            )));
         }
         if risky.len() > 6 {
             warn = warn.child(
@@ -872,7 +928,11 @@ impl AgentCleanup {
         let go_btn = if can_go {
             go_btn.on_click(cx.listener(|this, _, _, cx| {
                 if let Some(c) = this.confirm.take() {
-                    this.recycle(&c.paths);
+                    if c.trail {
+                        this.recycle_trail(&c.paths);
+                    } else {
+                        this.recycle(&c.paths);
+                    }
                 }
                 cx.notify();
             }))
@@ -935,7 +995,7 @@ impl AgentCleanup {
                                     .text_color(GREEN)
                                     .text_size(px(13.))
                                     .child(icon(IconName::ShieldCheck, 15., GREEN))
-                                    .child("Everything is committed and pushed, so you can clone it again any time."),
+                                    .child(div().flex_1().min_w_0().child(safe_text)),
                             )
                         })
                         .when(needs_ack, |d| {
@@ -951,7 +1011,7 @@ impl AgentCleanup {
                                         div()
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(ORANGE)
-                                            .child("Some work here isn't saved anywhere else:"),
+                                            .child(warn_title),
                                     )
                                     .child(warn),
                             )
@@ -971,7 +1031,7 @@ impl AgentCleanup {
                                             .when(ack, |d| d.bg(ORANGE).border_color(ORANGE).child(icon(IconName::Check, 13., hex_white())))
                                             .when(!ack, |d| d.border_color(MUTED)),
                                     )
-                                    .child("I understand this work only exists on this PC")
+                                    .child(ack_text)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(c) = &mut this.confirm {
                                             c.ack = !c.ack;

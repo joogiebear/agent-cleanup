@@ -9,6 +9,7 @@ use agent_cleanup::config::Config;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
 use agent_cleanup::scan::{self, ScanEvent};
+use agent_cleanup::trail::{self, Item};
 use agent_cleanup::update::{self, Update};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -28,6 +29,7 @@ const POLL: Duration = Duration::from_millis(60);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Leftovers,
+    Trail,
     Projects,
     Activity,
     Settings,
@@ -58,11 +60,25 @@ pub struct Notice {
     pub shown_at: Instant,
     /// Repos that were just recycled and can be put back.
     pub undo: Vec<Repo>,
+    /// Agent trail items that were just recycled.
+    pub undo_trail: Vec<Item>,
 }
 
 pub struct Confirm {
     pub paths: Vec<PathBuf>,
     pub ack: bool,
+    /// The paths are agent trail items, not repos from the scan.
+    pub trail: bool,
+}
+
+/// The agent trail page's data, read in the background.
+#[derive(Default)]
+pub struct Trail {
+    pub items: Vec<Item>,
+    pub loading: Option<(Receiver<Vec<Item>>, Arc<AtomicBool>)>,
+    pub loaded: bool,
+    /// How many session logs there were to read.
+    pub logs: usize,
 }
 
 pub struct AgentCleanup {
@@ -85,6 +101,7 @@ pub struct AgentCleanup {
     pub update: Arc<Mutex<UpdateState>>,
     pub update_dismissed: bool,
     pub activity: Vec<Entry>,
+    pub trail: Trail,
     pub list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -130,6 +147,7 @@ impl AgentCleanup {
             update: Arc::new(Mutex::new(UpdateState::Idle)),
             update_dismissed: false,
             activity: Vec::new(),
+            trail: Trail::default(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _poll: poll,
@@ -168,6 +186,7 @@ impl AgentCleanup {
             is_error,
             shown_at: Instant::now(),
             undo: Vec::new(),
+            undo_trail: Vec::new(),
         });
     }
 
@@ -195,7 +214,7 @@ impl AgentCleanup {
     /// Runs every [`POLL`]: picks up scan results, update progress and
     /// expires the notice. Only redraws when something changed.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_scan();
+        let mut changed = self.poll_scan() | self.poll_trail();
         if let Some(n) = &self.notice
             && n.shown_at.elapsed() > Duration::from_secs(NOTICE_SECS)
         {
@@ -329,13 +348,133 @@ impl AgentCleanup {
         if page == Page::Activity {
             self.activity = activity::load(500);
         }
+        if page == Page::Trail && !self.trail.loaded && self.trail.loading.is_none() {
+            self.load_trail();
+        }
         self.page = page;
     }
 
     pub fn ask_recycle(&mut self, paths: Vec<PathBuf>) {
         if !paths.is_empty() {
-            self.confirm = Some(Confirm { paths, ack: false });
+            self.confirm = Some(Confirm {
+                paths,
+                ack: false,
+                trail: false,
+            });
         }
+    }
+
+    pub fn ask_recycle_trail(&mut self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() {
+            self.confirm = Some(Confirm {
+                paths,
+                ack: false,
+                trail: true,
+            });
+        }
+    }
+
+    // ---- agent trail ---------------------------------------------------
+
+    pub fn load_trail(&mut self) {
+        if let Some((_, cancel)) = &self.trail.loading {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let Some(home) = self.home.clone() else {
+            self.trail.loaded = true;
+            return;
+        };
+        let since = SystemTime::now() - Duration::from_secs(trail::DAYS * 86_400);
+        self.trail.logs = trail::log_files(&home, since).len();
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (cfg, stop) = (self.cfg.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(trail::collect(&cfg, &home, since, &stop));
+        });
+        self.trail.loading = Some((rx, cancel));
+    }
+
+    fn poll_trail(&mut self) -> bool {
+        let Some((rx, _)) = &self.trail.loading else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(items) => {
+                self.trail.items = items;
+                self.trail.loaded = true;
+                self.trail.loading = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.trail.loading = None;
+                self.trail.loaded = true;
+                true
+            }
+        }
+    }
+
+    pub fn trail_item(&self, p: &Path) -> Option<&Item> {
+        self.trail.items.iter().find(|i| i.path == p)
+    }
+
+    pub fn hide_trail(&mut self, p: PathBuf) {
+        self.trail.items.retain(|i| i.path != p);
+        self.notify_text(
+            format!("Hidden {}. Unhide it on the Projects page.", self.short(&p)),
+            false,
+        );
+        self.cfg.ignored.push(p);
+        self.save_config();
+    }
+
+    pub fn recycle_trail(&mut self, paths: &[PathBuf]) {
+        let mut moved = Vec::new();
+        let mut failed = Vec::new();
+        for p in paths {
+            let Some(item) = self.trail_item(p).cloned() else {
+                continue;
+            };
+            match actions::recycle(p) {
+                Ok(()) => moved.push(item),
+                Err(e) => failed.push(format!("{} ({e})", item.name())),
+            }
+        }
+        self.trail
+            .items
+            .retain(|i| !moved.iter().any(|m| m.path == i.path));
+        // A clone can be on both pages; keep the Leftovers list in step.
+        let gone: Vec<PathBuf> = moved.iter().map(|i| i.path.clone()).collect();
+        if !self.lib.remove(&gone).is_empty() {
+            if self.focused.as_ref().is_some_and(|f| gone.contains(f)) {
+                self.focused = None;
+            }
+            self.save_cache();
+        }
+        let freed: u64 = moved.iter().map(|i| i.size_bytes).sum();
+        let mut text = match moved.len() {
+            0 => String::new(),
+            1 => format!(
+                "Moved {} to the Recycle Bin, freeing {}.",
+                moved[0].name(),
+                human_size(freed)
+            ),
+            n => format!(
+                "Moved {n} items to the Recycle Bin, freeing {}.",
+                human_size(freed)
+            ),
+        };
+        if !failed.is_empty() {
+            text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
+        }
+        self.notice = Some(Notice {
+            text: text.trim().to_string(),
+            is_error: !failed.is_empty(),
+            shown_at: Instant::now(),
+            undo: Vec::new(),
+            undo_trail: moved,
+        });
     }
 
     pub fn add_project(&mut self, p: PathBuf) {
@@ -455,6 +594,7 @@ impl AgentCleanup {
             }
         }
         let moved = self.lib.remove(&moved_paths);
+        self.trail.items.retain(|i| !moved_paths.contains(&i.path));
         if self
             .focused
             .as_ref()
@@ -485,6 +625,7 @@ impl AgentCleanup {
             is_error: !failed.is_empty(),
             shown_at: Instant::now(),
             undo: moved,
+            undo_trail: Vec::new(),
         });
     }
 
@@ -503,11 +644,23 @@ impl AgentCleanup {
                 Err(e) => failed.push(format!("{} ({e})", repo.name())),
             }
         }
+        for item in notice.undo_trail {
+            match actions::restore(&item.path) {
+                Ok(()) => {
+                    restored += 1;
+                    // The Leftovers list only picks a repo up again on a scan.
+                    self.needs_rescan |= item.is_repo();
+                    self.trail.items.push(item);
+                }
+                Err(e) => failed.push(format!("{} ({e})", item.name())),
+            }
+        }
+        self.trail.items.sort_by_key(|i| std::cmp::Reverse(i.when));
         self.save_cache();
         if failed.is_empty() {
             self.notify_text(
                 format!(
-                    "Put back {restored} repo{}.",
+                    "Put back {restored} item{}.",
                     if restored == 1 { "" } else { "s" }
                 ),
                 false,
@@ -579,6 +732,12 @@ impl AgentCleanup {
                 Page::Leftovers,
             ))
             .child(item(
+                "nav-trail",
+                IconName::Footprints,
+                "Agent trail: files and clones agents left outside their projects",
+                Page::Trail,
+            ))
+            .child(item(
                 "nav-projects",
                 IconName::FolderHeart,
                 "Projects: the folders that hold your real work",
@@ -630,6 +789,7 @@ impl Render for AgentCleanup {
         } else {
             match self.page {
                 Page::Leftovers => self.leftovers_page(window, cx).into_any_element(),
+                Page::Trail => self.trail_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),
                 Page::Activity => self.activity_page(cx).into_any_element(),
                 Page::Settings => self.settings_page(cx).into_any_element(),
