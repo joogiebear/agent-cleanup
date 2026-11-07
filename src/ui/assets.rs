@@ -33,6 +33,9 @@ gpui_kit::assets::icon_assets!(
         ListChecks,
         Scan,
         Folders,
+        Footprints,
+        FilePen,
+        RefreshCw,
     ]
 );
 

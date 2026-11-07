@@ -17,9 +17,17 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
-The left rail switches between **Leftovers**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
+The left rail switches between **Leftovers**, **Agent trail**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
 
 ![Details panel](docs/details.png)
+
+## Agent trail
+
+Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sessions`). The **Agent trail** page reads the last 90 days of those logs, read-only, and lists what an agent made outside the folder it was working in: files it wrote, things it downloaded with `curl` or `wget`, and repos it cloned. Items are grouped by the project the agent was working on, with which agent did it and when.
+
+Files an agent only *changed* (say, your `.bashrc`), files that are older than the session, and clones with unsaved git work are marked **Check first**. They need a tick before they can be recycled, and **Clean up** leaves them out.
+
+![Agent trail](docs/trail.png)
 
 ## Cleaning up
 
@@ -59,10 +67,9 @@ Bump `version` in `Cargo.toml` and merge to `main`. The Release workflow builds 
 
 ## Roadmap
 
-1. **Agent trail reader:** read Claude Code (`~/.claude/projects`) and Codex (`~/.codex/sessions`) session logs to find files and clones an agent created outside the project it was working on.
-2. **Downloads matched to projects:** link files in Downloads to the project you were working on when they arrived.
-3. **Build junk reclaim:** `node_modules`, `target`, `.venv` and `dist` in projects you haven't touched lately.
-4. A scheduled background scan and a tray icon.
+1. **Downloads matched to projects:** link files in Downloads to the project you were working on when they arrived.
+2. **Build junk reclaim:** `node_modules`, `target`, `.venv` and `dist` in projects you haven't touched lately.
+3. A scheduled background scan and a tray icon.
 
 ## Development
 
