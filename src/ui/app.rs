@@ -38,6 +38,7 @@ pub enum Page {
     Trail,
     Downloads,
     AgentData,
+    Duplicates,
     Junk,
     Updates,
     Projects,
@@ -88,6 +89,7 @@ pub enum ConfirmFor {
     Junk,
     Downloads,
     AgentData,
+    Duplicates,
 }
 
 pub struct Confirm {
@@ -182,6 +184,8 @@ pub struct AgentCleanup {
     pub trail: Trail,
     pub downloads: Downloads,
     pub agentdata: AgentData,
+    /// Duplicate groups where the user picked which copy to keep.
+    pub dup_keep: std::collections::HashMap<String, PathBuf>,
     pub junk: Junk,
     pub deps: Deps,
     /// Whether the weekly check is scheduled; asked when Settings opens.
@@ -237,6 +241,7 @@ impl AgentCleanup {
                 ..Downloads::default()
             },
             agentdata: AgentData::default(),
+            dup_keep: Default::default(),
             junk: Junk::default(),
             deps: Deps::default(),
             weekly: None,
@@ -480,6 +485,16 @@ impl AgentCleanup {
                 paths,
                 ack: false,
                 what: ConfirmFor::Repos,
+            });
+        }
+    }
+
+    pub fn ask_recycle_dupes(&mut self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() {
+            self.confirm = Some(Confirm {
+                paths,
+                ack: false,
+                what: ConfirmFor::Duplicates,
             });
         }
     }
@@ -1476,6 +1491,12 @@ impl AgentCleanup {
                 Page::AgentData,
             ))
             .child(item(
+                "nav-dupes",
+                IconName::Copy,
+                "Duplicates: the same repo cloned more than once",
+                Page::Duplicates,
+            ))
+            .child(item(
                 "nav-junk",
                 IconName::Package,
                 "Build junk: dependency and build folders one command can recreate",
@@ -1542,6 +1563,7 @@ impl Render for AgentCleanup {
                 Page::Trail => self.trail_page(cx).into_any_element(),
                 Page::Downloads => self.downloads_page(cx).into_any_element(),
                 Page::AgentData => self.agentdata_page(cx).into_any_element(),
+                Page::Duplicates => self.dupes_page(cx).into_any_element(),
                 Page::Junk => self.junk_page(cx).into_any_element(),
                 Page::Updates => self.updates_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),

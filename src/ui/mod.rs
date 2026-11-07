@@ -9,6 +9,7 @@ mod app;
 mod assets;
 mod details;
 mod downloads;
+mod dupes;
 mod junk;
 mod leftovers;
 mod pages;

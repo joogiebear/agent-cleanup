@@ -683,6 +683,7 @@ impl AgentCleanup {
                 .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
                 .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old repo to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
                 .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week needs a tick first in case the project only moved."))
+                .child(block(IconName::Copy, BLUE, "Duplicates", "The same repo cloned into more than one folder, matched by its remote. One copy is kept (the one in a project folder, or the most recently used; pin another to change it) and Clean up recycles the extra copies that are fully pushed."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
@@ -885,6 +886,37 @@ impl AgentCleanup {
                     }
                 })
                 .collect()
+        } else if c.what == ConfirmFor::Duplicates {
+            c.paths
+                .iter()
+                .filter_map(|p| self.lib.get(p))
+                .map(|r| {
+                    // Another copy is kept, so only work that exists in
+                    // this copy alone is a risk.
+                    let risk = if r.project_root.is_some() {
+                        Some("inside one of your project folders".to_string())
+                    } else {
+                        match &r.git {
+                            None => Some("git couldn't read it".to_string()),
+                            Some(g) if g.has_local_work() => {
+                                Some(g.local_work_reasons().join(", "))
+                            }
+                            Some(_) => None,
+                        }
+                    };
+                    Row {
+                        name: self.short(&r.path),
+                        size: r.size_bytes,
+                        icon: if risk.is_some() {
+                            IconName::TriangleAlert
+                        } else {
+                            IconName::Copy
+                        },
+                        color: if risk.is_some() { ORANGE } else { GREEN },
+                        risk,
+                    }
+                })
+                .collect()
         } else if c.what == ConfirmFor::AgentData {
             c.paths
                 .iter()
@@ -945,11 +977,15 @@ impl AgentCleanup {
                         if !r.is_stray() {
                             "inside one of your project folders".to_string()
                         } else {
-                            r.git
-                                .as_ref()
-                                .map(|g| g.local_work_reasons().join(", "))
-                                .filter(|s| !s.is_empty())
-                                .unwrap_or_else(|| "git couldn't read it".into())
+                            match &r.git {
+                                None => "git couldn't read it".to_string(),
+                                Some(g) if g.has_local_work() => g.local_work_reasons().join(", "),
+                                // Everything is pushed; it was just used recently.
+                                Some(_) => r
+                                    .last_activity
+                                    .map(|t| format!("used {}", relative_time(t, now)))
+                                    .unwrap_or_else(|| "used recently".into()),
+                            }
                         }
                     });
                     Row {
@@ -972,6 +1008,7 @@ impl AgentCleanup {
             ConfirmFor::Junk => "folders",
             ConfirmFor::Downloads => "downloads",
             ConfirmFor::AgentData => "session histories",
+            ConfirmFor::Duplicates => "extra copies",
         };
         let title = if rows.len() == 1 {
             format!("Move \"{}\" to the Recycle Bin?", rows[0].name)
@@ -983,6 +1020,12 @@ impl AgentCleanup {
                 "Each one is rebuilt by a single command, like npm install or cargo build. Empty the Recycle Bin afterwards to get the space back.",
                 "These projects are still in use:",
                 "I'll rebuild these when I need them",
+            )
+        } else if c.what == ConfirmFor::Duplicates {
+            (
+                "Another copy of each is kept, and everything in these is pushed.",
+                "These have something the kept copy may not:",
+                "I've checked these and they can go",
             )
         } else if c.what == ConfirmFor::AgentData {
             (
@@ -1070,6 +1113,7 @@ impl AgentCleanup {
                         ConfirmFor::Junk => this.recycle_junk(&c.paths),
                         ConfirmFor::Downloads => this.recycle_downloads(&c.paths),
                         ConfirmFor::AgentData => this.recycle_agentdata(&c.paths),
+                        ConfirmFor::Duplicates => this.recycle(&c.paths),
                     }
                 }
                 cx.notify();
