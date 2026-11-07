@@ -27,6 +27,8 @@ pub enum Verdict {
     SafeToRemove,
     /// Stray, but has commits/changes/stashes that exist only on this PC.
     UnsavedWork,
+    /// Stray, and git couldn't read it, so what's in it is unknown.
+    Unreadable,
     /// Stray but used recently; maybe still in use.
     StrayActive,
     InProject,
@@ -38,6 +40,7 @@ impl Verdict {
         match self {
             Verdict::SafeToRemove => "Safe to remove",
             Verdict::UnsavedWork => "Has unsaved work",
+            Verdict::Unreadable => "Couldn't check",
             Verdict::StrayActive => "Stray, recent",
             Verdict::InProject => "In a project",
             Verdict::Checking => "Checking…",
@@ -51,6 +54,9 @@ impl Verdict {
             }
             Verdict::UnsavedWork => {
                 "Outside your project folders, but it has work that exists only on this PC. Review before removing."
+            }
+            Verdict::Unreadable => {
+                "Outside your project folders, but git couldn't read it, so it's treated as unsaved work. Often a broken or half-copied repo."
             }
             Verdict::StrayActive => "Outside your project folders, but it was used recently.",
             Verdict::InProject => "Inside one of your project folders.",
@@ -102,6 +108,8 @@ impl Repo {
             Verdict::Checking
         } else if !self.is_stray() {
             Verdict::InProject
+        } else if self.error.is_some() || self.git.is_none() {
+            Verdict::Unreadable
         } else if self.has_local_work() {
             Verdict::UnsavedWork
         } else if self.is_stale(cfg.stale_after_days, now) {
@@ -124,9 +132,11 @@ impl Repo {
             _ => {}
         }
         if let Some(e) = &self.error {
-            steps.push(format!(
-                "Git couldn't read this repo ({e}). Open it and check it by hand before removing it."
-            ));
+            steps.push(format!("Git couldn't read this repo: {e}"));
+            steps.push(
+                "Open the folder and look before removing it. If it's a broken copy you don't need, recycle it; you can undo."
+                    .to_string(),
+            );
             return steps;
         }
         if let Some(g) = &self.git {
@@ -178,7 +188,7 @@ impl Repo {
     /// One-line git summary for the table.
     pub fn git_summary(&self) -> String {
         if let Some(e) = &self.error {
-            return format!("Error: {e}");
+            return format!("Git can't read it: {e}");
         }
         let Some(g) = &self.git else {
             return String::new();
@@ -292,9 +302,10 @@ mod tests {
         failed.inspected = true;
         assert_eq!(
             failed.verdict(&cfg, now),
-            Verdict::UnsavedWork,
+            Verdict::Unreadable,
             "unknown state must not look safe"
         );
+        assert!(failed.has_local_work(), "and still counts as unsaved");
     }
 
     #[test]

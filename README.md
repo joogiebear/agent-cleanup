@@ -14,6 +14,7 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
 4. **It gives each repo a status:**
    - **Safe to remove:** outside your projects, unused for a while (14 days by default), and everything is pushed.
    - **Has unsaved work:** outside your projects, but something in it exists only on this PC.
+   - **Couldn't check:** git couldn't read it, often a half-copied repo or a worktree whose main repo is gone. The reason is shown, and it's treated like unsaved work.
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
