@@ -4,6 +4,7 @@
 pub mod actions;
 pub mod activity;
 pub mod cache;
+pub mod check;
 pub mod config;
 pub mod deps;
 pub mod downloads;
@@ -12,5 +13,6 @@ pub mod junk;
 pub mod library;
 pub mod model;
 pub mod scan;
+pub mod schedule;
 pub mod trail;
 pub mod update;

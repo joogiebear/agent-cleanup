@@ -13,6 +13,7 @@ use agent_cleanup::junk;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
 use agent_cleanup::scan::{self, ScanEvent};
+use agent_cleanup::schedule;
 use agent_cleanup::trail::{self, Item};
 use agent_cleanup::update::{self, Update};
 use gpui_kit::assets::IconName;
@@ -169,6 +170,8 @@ pub struct AgentCleanup {
     pub downloads: Downloads,
     pub junk: Junk,
     pub deps: Deps,
+    /// Whether the weekly check is scheduled; asked when Settings opens.
+    pub weekly: Option<schedule::Status>,
     pub list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -221,6 +224,7 @@ impl AgentCleanup {
             },
             junk: Junk::default(),
             deps: Deps::default(),
+            weekly: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _poll: poll,
@@ -429,6 +433,9 @@ impl AgentCleanup {
     pub fn go(&mut self, page: Page) {
         if page == Page::Activity {
             self.activity = activity::load(500);
+        }
+        if page == Page::Settings && self.weekly.is_none() {
+            self.weekly = Some(schedule::status());
         }
         if page == Page::Trail && !self.trail.loaded && self.trail.loading.is_none() {
             self.load_trail();
@@ -953,6 +960,43 @@ impl AgentCleanup {
             undo_junk: Vec::new(),
             undo_downloads: Vec::new(),
         });
+    }
+
+    /// Adds or removes the weekly scheduled task.
+    pub fn set_weekly(&mut self, on: bool) {
+        let res = if on {
+            schedule::enable()
+        } else {
+            schedule::disable()
+        };
+        match res {
+            Ok(()) => self.notify_text(
+                if on {
+                    "Weekly check is on. It runs on Mondays, or the next time your PC is on."
+                } else {
+                    "Weekly check is off."
+                },
+                false,
+            ),
+            Err(e) => self.notify_text(format!("Couldn't change the weekly check: {e}"), true),
+        }
+        self.weekly = Some(schedule::status());
+    }
+
+    /// Runs the background check now, as the scheduled task would.
+    pub fn run_check_now(&mut self) {
+        let started = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .arg(schedule::CHECK_ARG)
+                .spawn()
+        });
+        match started {
+            Ok(_) => self.notify_text(
+                "Checking in the background. A notification appears if there's enough to clean.",
+                false,
+            ),
+            Err(e) => self.notify_text(format!("Couldn't start the check: {e}"), true),
+        }
     }
 
     pub fn add_project(&mut self, p: PathBuf) {
