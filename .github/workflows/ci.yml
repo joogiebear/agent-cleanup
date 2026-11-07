@@ -23,6 +23,12 @@ jobs:
         run: cargo test
       - name: Build release .exe
         run: cargo build --release
+      - name: Report .exe size
+        shell: bash
+        run: |
+          bytes=$(stat -c %s target/release/agent-cleanup.exe)
+          echo "agent-cleanup.exe is $bytes bytes ($((bytes / 1048576)) MB)"
+          echo "### agent-cleanup.exe: $((bytes / 1048576)) MB ($bytes bytes)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: agent-cleanup-windows

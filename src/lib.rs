@@ -2,9 +2,11 @@
 //! (and later reused by a command line or background mode).
 
 pub mod actions;
+pub mod activity;
 pub mod cache;
 pub mod config;
 pub mod git;
+pub mod library;
 pub mod model;
 pub mod scan;
 pub mod update;
