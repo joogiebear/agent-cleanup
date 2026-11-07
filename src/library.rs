@@ -15,16 +15,18 @@ pub enum Filter {
     Strays,
     SafeToRemove,
     UnsavedWork,
+    Unreadable,
     StrayActive,
     /// Including repos inside project folders.
     All,
 }
 
 impl Filter {
-    pub const ALL: [Filter; 5] = [
+    pub const ALL: [Filter; 6] = [
         Filter::Strays,
         Filter::SafeToRemove,
         Filter::UnsavedWork,
+        Filter::Unreadable,
         Filter::StrayActive,
         Filter::All,
     ];
@@ -34,6 +36,7 @@ impl Filter {
             Filter::Strays => "All leftovers",
             Filter::SafeToRemove => "Safe to remove",
             Filter::UnsavedWork => "Unsaved work",
+            Filter::Unreadable => "Couldn't check",
             Filter::StrayActive => "Recent",
             Filter::All => "Everything",
         }
@@ -44,6 +47,7 @@ impl Filter {
             Filter::Strays => "Every repo found outside your project folders.",
             Filter::SafeToRemove => Verdict::SafeToRemove.explanation(),
             Filter::UnsavedWork => Verdict::UnsavedWork.explanation(),
+            Filter::Unreadable => Verdict::Unreadable.explanation(),
             Filter::StrayActive => Verdict::StrayActive.explanation(),
             Filter::All => "Every repo found, including the ones inside your project folders.",
         }
@@ -54,6 +58,7 @@ impl Filter {
             Filter::Strays => stray,
             Filter::SafeToRemove => v == Verdict::SafeToRemove,
             Filter::UnsavedWork => v == Verdict::UnsavedWork,
+            Filter::Unreadable => v == Verdict::Unreadable,
             Filter::StrayActive => v == Verdict::StrayActive,
             Filter::All => true,
         }
@@ -88,6 +93,8 @@ pub struct Stats {
     pub safe: usize,
     pub safe_bytes: u64,
     pub unsaved: usize,
+    /// Strays git couldn't read.
+    pub unreadable: usize,
     pub recent: usize,
     pub in_projects: usize,
     pub checking: usize,
@@ -213,6 +220,7 @@ impl Library {
                     s.safe_bytes += size;
                 }
                 Verdict::UnsavedWork => s.unsaved += 1,
+                Verdict::Unreadable => s.unreadable += 1,
                 Verdict::StrayActive => s.recent += 1,
                 Verdict::InProject => s.in_projects += 1,
                 Verdict::Checking => s.checking += 1,
