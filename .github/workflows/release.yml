@@ -1,0 +1,29 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the Windows .exe and publish it as a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test
+      - name: Build release .exe
+        run: cargo build --release
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/agent-cleanup.exe "agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe"
+          gh release create "$GITHUB_REF_NAME" "agent-cleanup-${GITHUB_REF_NAME}-windows-x64.exe" \
+            --title "Agent Cleanup $GITHUB_REF_NAME" --generate-notes
