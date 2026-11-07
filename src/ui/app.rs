@@ -7,6 +7,7 @@ use agent_cleanup::activity::{self, Entry};
 use agent_cleanup::cache::ScanCache;
 use agent_cleanup::config::Config;
 use agent_cleanup::config::path_within;
+use agent_cleanup::deps::{self, Eco};
 use agent_cleanup::junk;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
@@ -33,6 +34,7 @@ pub enum Page {
     Leftovers,
     Trail,
     Junk,
+    Updates,
     Projects,
     Activity,
     Settings,
@@ -97,6 +99,22 @@ pub struct Junk {
     pub busy: Option<(Receiver<JunkJob>, String)>,
 }
 
+type DepsLoad = (
+    Receiver<Vec<deps::Report>>,
+    Arc<AtomicBool>,
+    Arc<AtomicUsize>,
+);
+
+/// Outdated dependencies, checked in the background.
+#[derive(Default)]
+pub struct Deps {
+    pub reports: Vec<deps::Report>,
+    pub loading: Option<DepsLoad>,
+    pub loaded: bool,
+    /// Project repos being checked.
+    pub repos: usize,
+}
+
 pub struct JunkJob {
     pub restore: bool,
     pub done: Vec<junk::Item>,
@@ -135,6 +153,7 @@ pub struct AgentCleanup {
     pub activity: Vec<Entry>,
     pub trail: Trail,
     pub junk: Junk,
+    pub deps: Deps,
     pub list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -182,6 +201,7 @@ impl AgentCleanup {
             activity: Vec::new(),
             trail: Trail::default(),
             junk: Junk::default(),
+            deps: Deps::default(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _poll: poll,
@@ -249,8 +269,9 @@ impl AgentCleanup {
     /// Runs every [`POLL`]: picks up scan results, update progress and
     /// expires the notice. Only redraws when something changed.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_scan() | self.poll_trail() | self.poll_junk();
-        if self.junk.loading.is_some() {
+        let mut changed =
+            self.poll_scan() | self.poll_trail() | self.poll_junk() | self.poll_deps();
+        if self.junk.loading.is_some() || self.deps.loading.is_some() {
             changed = true; // progress counter
         }
         if let Some(n) = &self.notice
@@ -392,6 +413,9 @@ impl AgentCleanup {
         if page == Page::Junk && !self.junk.loaded && self.junk.loading.is_none() {
             self.load_junk();
         }
+        if page == Page::Updates && !self.deps.loaded && self.deps.loading.is_none() {
+            self.load_deps();
+        }
         self.page = page;
     }
 
@@ -422,6 +446,85 @@ impl AgentCleanup {
                 ack: false,
                 what: ConfirmFor::Junk,
             });
+        }
+    }
+
+    // ---- dependency updates --------------------------------------------
+
+    pub fn load_deps(&mut self) {
+        if let Some((_, cancel, _)) = &self.deps.loading {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let all: Vec<PathBuf> = self.lib.repos().iter().map(|r| r.path.clone()).collect();
+        let repos = deps::eligible(&all, &self.cfg);
+        self.deps.repos = repos.len();
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicUsize::new(0));
+        let (stop, count) = (cancel.clone(), done.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(deps::check_all(&repos, &stop, &count));
+        });
+        self.deps.loading = Some((rx, cancel, done));
+    }
+
+    pub fn deps_progress(&self) -> usize {
+        self.deps
+            .loading
+            .as_ref()
+            .map_or(0, |(_, _, d)| d.load(Ordering::Relaxed))
+    }
+
+    fn poll_deps(&mut self) -> bool {
+        let Some((rx, _, _)) = &self.deps.loading else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(reports) => self.deps.reports = reports,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+        self.deps.loaded = true;
+        self.deps.loading = None;
+        true
+    }
+
+    /// Opens a terminal running the update, but only when git shows no
+    /// uncommitted changes, so `git diff` shows exactly what the update did
+    /// and `git checkout .` undoes it.
+    pub fn run_update(&mut self, repo: &Path, eco: Eco) {
+        let Some(report) = self
+            .deps
+            .reports
+            .iter()
+            .find(|r| r.repo == repo && r.eco == eco)
+        else {
+            return;
+        };
+        let Some(cmd) = report.update_command() else {
+            return;
+        };
+        let (dir, name) = (report.dir.clone(), self.short(repo));
+        match agent_cleanup::git::inspect(repo) {
+            Ok(g) if g.changed_files == 0 => match actions::run_in_terminal(&dir, &cmd) {
+                Ok(()) => self.notify_text(
+                    format!("Opened a terminal running {cmd} in {name}. Check again when it's done."),
+                    false,
+                ),
+                Err(e) => self.notify_text(format!("Couldn't open a terminal: {e}"), true),
+            },
+            Ok(g) => self.notify_text(
+                format!(
+                    "{name} has {} uncommitted change{}. Commit or stash first, so you can see and undo what the update changes.",
+                    g.changed_files,
+                    if g.changed_files == 1 { "" } else { "s" }
+                ),
+                true,
+            ),
+            Err(e) => self.notify_text(
+                format!("Couldn't read git state for {name} ({e}), so the update wasn't started."),
+                true,
+            ),
         }
     }
 
@@ -971,6 +1074,12 @@ impl AgentCleanup {
                 Page::Junk,
             ))
             .child(item(
+                "nav-updates",
+                IconName::CircleArrowUp,
+                "Updates: outdated packages in your projects",
+                Page::Updates,
+            ))
+            .child(item(
                 "nav-projects",
                 IconName::FolderHeart,
                 "Projects: the folders that hold your real work",
@@ -1024,6 +1133,7 @@ impl Render for AgentCleanup {
                 Page::Leftovers => self.leftovers_page(window, cx).into_any_element(),
                 Page::Trail => self.trail_page(cx).into_any_element(),
                 Page::Junk => self.junk_page(cx).into_any_element(),
+                Page::Updates => self.updates_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),
                 Page::Activity => self.activity_page(cx).into_any_element(),
                 Page::Settings => self.settings_page(cx).into_any_element(),

@@ -635,6 +635,7 @@ impl AgentCleanup {
                 )
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
+                .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
         )
     }
