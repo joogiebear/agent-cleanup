@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod activity;
+pub mod agentdata;
 pub mod cache;
 pub mod check;
 pub mod config;

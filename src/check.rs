@@ -26,11 +26,14 @@ pub struct Summary {
     /// Build folders in projects you haven't touched for a while.
     pub junk: usize,
     pub junk_bytes: u64,
+    /// Agent session data for deleted projects, not used in the last week.
+    pub agent_data: usize,
+    pub agent_data_bytes: u64,
 }
 
 impl Summary {
     pub fn total_bytes(&self) -> u64 {
-        self.repo_bytes + self.trail_bytes + self.junk_bytes
+        self.repo_bytes + self.trail_bytes + self.junk_bytes + self.agent_data_bytes
     }
 
     /// Whether this is worth a notification.
@@ -64,6 +67,12 @@ impl Summary {
             parts.push(format!(
                 "{} of build folders in idle projects",
                 human_size(self.junk_bytes)
+            ));
+        }
+        if self.agent_data > 0 {
+            parts.push(format!(
+                "{} of agent history for deleted projects",
+                human_size(self.agent_data_bytes)
             ));
         }
         let title = format!("{} to clean up", human_size(self.total_bytes()));
@@ -106,6 +115,12 @@ pub fn run(cfg: &Config, home: Option<&Path>) -> Summary {
                 s.trail_bytes += it.size_bytes;
             }
         }
+        for o in crate::agentdata::find(home, cfg, &cancel) {
+            if !o.is_recent(now) {
+                s.agent_data += 1;
+                s.agent_data_bytes += o.size_bytes;
+            }
+        }
     }
 
     let with_activity: Vec<_> = lib
@@ -146,6 +161,7 @@ mod tests {
             trail_bytes: 5 * MB,
             junk: 4,
             junk_bytes: 1200 * MB,
+            ..Summary::default()
         };
         let (title, body) = s.message().unwrap();
         assert_eq!(title, format!("{} to clean up", human_size(1505 * MB)));

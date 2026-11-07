@@ -4,6 +4,7 @@ use super::theme::*;
 use super::widgets::*;
 use agent_cleanup::actions;
 use agent_cleanup::activity::{self, Entry};
+use agent_cleanup::agentdata::{self, Orphan};
 use agent_cleanup::cache::ScanCache;
 use agent_cleanup::config::Config;
 use agent_cleanup::config::path_within;
@@ -36,6 +37,7 @@ pub enum Page {
     Leftovers,
     Trail,
     Downloads,
+    AgentData,
     Junk,
     Updates,
     Projects,
@@ -74,6 +76,8 @@ pub struct Notice {
     pub undo_junk: Vec<junk::Item>,
     /// Downloads that were just recycled (`None`) or moved (`Some(to)`).
     pub undo_downloads: Vec<(Download, Option<PathBuf>)>,
+    /// Agent data that was just recycled.
+    pub undo_agentdata: Vec<Orphan>,
 }
 
 /// Which page's things a confirm dialog is about.
@@ -83,6 +87,7 @@ pub enum ConfirmFor {
     Trail,
     Junk,
     Downloads,
+    AgentData,
 }
 
 pub struct Confirm {
@@ -127,6 +132,14 @@ pub struct JunkJob {
     pub failed: Vec<String>,
 }
 
+/// Agent session data for deleted projects, found in the background.
+#[derive(Default)]
+pub struct AgentData {
+    pub items: Vec<Orphan>,
+    pub loading: Option<(Receiver<Vec<Orphan>>, Arc<AtomicBool>)>,
+    pub loaded: bool,
+}
+
 /// The Downloads folder, listed and matched in the background.
 #[derive(Default)]
 pub struct Downloads {
@@ -168,6 +181,7 @@ pub struct AgentCleanup {
     pub activity: Vec<Entry>,
     pub trail: Trail,
     pub downloads: Downloads,
+    pub agentdata: AgentData,
     pub junk: Junk,
     pub deps: Deps,
     /// Whether the weekly check is scheduled; asked when Settings opens.
@@ -222,6 +236,7 @@ impl AgentCleanup {
                 dir: downloads::downloads_dir(),
                 ..Downloads::default()
             },
+            agentdata: AgentData::default(),
             junk: Junk::default(),
             deps: Deps::default(),
             weekly: None,
@@ -268,6 +283,7 @@ impl AgentCleanup {
             undo_trail: Vec::new(),
             undo_junk: Vec::new(),
             undo_downloads: Vec::new(),
+            undo_agentdata: Vec::new(),
         });
     }
 
@@ -298,6 +314,7 @@ impl AgentCleanup {
         let mut changed = self.poll_scan()
             | self.poll_trail()
             | self.poll_downloads()
+            | self.poll_agentdata()
             | self.poll_junk()
             | self.poll_deps();
         if self.junk.loading.is_some() || self.deps.loading.is_some() {
@@ -445,6 +462,9 @@ impl AgentCleanup {
         if page == Page::Downloads && !self.downloads.loaded && self.downloads.loading.is_none() {
             self.load_downloads();
         }
+        if page == Page::AgentData && !self.agentdata.loaded && self.agentdata.loading.is_none() {
+            self.load_agentdata();
+        }
         if page == Page::Junk && !self.junk.loaded && self.junk.loading.is_none() {
             self.load_junk();
         }
@@ -480,6 +500,16 @@ impl AgentCleanup {
                 paths,
                 ack: false,
                 what: ConfirmFor::Downloads,
+            });
+        }
+    }
+
+    pub fn ask_recycle_agentdata(&mut self, keys: Vec<PathBuf>) {
+        if !keys.is_empty() {
+            self.confirm = Some(Confirm {
+                paths: keys,
+                ack: false,
+                what: ConfirmFor::AgentData,
             });
         }
     }
@@ -733,8 +763,127 @@ impl AgentCleanup {
                 undo_trail: Vec::new(),
                 undo_junk: job.done,
                 undo_downloads: Vec::new(),
+                undo_agentdata: Vec::new(),
             });
         }
+    }
+
+    // ---- agent data ----------------------------------------------------
+
+    pub fn load_agentdata(&mut self) {
+        if let Some((_, cancel)) = &self.agentdata.loading {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let Some(home) = self.home.clone() else {
+            self.agentdata.loaded = true;
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (cfg, stop) = (self.cfg.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(agentdata::find(&home, &cfg, &stop));
+        });
+        self.agentdata.loading = Some((rx, cancel));
+    }
+
+    fn poll_agentdata(&mut self) -> bool {
+        let Some((rx, _)) = &self.agentdata.loading else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(items) => {
+                self.agentdata.items = items;
+                self.agentdata.loaded = true;
+                self.agentdata.loading = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.agentdata.loading = None;
+                self.agentdata.loaded = true;
+                true
+            }
+        }
+    }
+
+    pub fn orphan(&self, key: &Path) -> Option<&Orphan> {
+        self.agentdata.items.iter().find(|o| o.key() == key)
+    }
+
+    pub fn hide_agentdata(&mut self, key: PathBuf) {
+        self.agentdata.items.retain(|o| o.key() != key);
+        self.notify_text(
+            format!(
+                "Hidden {}. Unhide it on the Projects page.",
+                self.short(&key)
+            ),
+            false,
+        );
+        self.cfg.ignored.push(key);
+        self.save_config();
+    }
+
+    /// Recycles every file and folder of each item. An item that only
+    /// partly moved is put back, so nothing is left half removed.
+    pub fn recycle_agentdata(&mut self, keys: &[PathBuf]) {
+        let mut moved = Vec::new();
+        let mut failed = Vec::new();
+        for key in keys {
+            let Some(o) = self.orphan(key).cloned() else {
+                continue;
+            };
+            let mut done = Vec::new();
+            let mut err = None;
+            for p in &o.paths {
+                match actions::recycle(p) {
+                    Ok(()) => done.push(p.clone()),
+                    Err(e) => {
+                        err = Some(e);
+                        break;
+                    }
+                }
+            }
+            match err {
+                None => moved.push(o),
+                Some(e) => {
+                    for p in &done {
+                        let _ = actions::restore(p);
+                    }
+                    failed.push(format!("{} ({e})", o.project_name()));
+                }
+            }
+        }
+        self.agentdata
+            .items
+            .retain(|o| !moved.iter().any(|m| m.key() == o.key()));
+        let freed: u64 = moved.iter().map(|o| o.size_bytes).sum();
+        let mut text = match moved.len() {
+            0 => String::new(),
+            1 => format!(
+                "Moved {}'s {} data to the Recycle Bin, freeing {}.",
+                moved[0].project_name(),
+                moved[0].agent.label(),
+                human_size(freed)
+            ),
+            n => format!(
+                "Moved agent data for {n} projects to the Recycle Bin, freeing {}.",
+                human_size(freed)
+            ),
+        };
+        if !failed.is_empty() {
+            text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
+        }
+        self.notice = Some(Notice {
+            text: text.trim().to_string(),
+            is_error: !failed.is_empty(),
+            shown_at: Instant::now(),
+            undo: Vec::new(),
+            undo_trail: Vec::new(),
+            undo_junk: Vec::new(),
+            undo_downloads: Vec::new(),
+            undo_agentdata: moved,
+        });
     }
 
     // ---- downloads -----------------------------------------------------
@@ -811,6 +960,7 @@ impl AgentCleanup {
                     undo_trail: Vec::new(),
                     undo_junk: Vec::new(),
                     undo_downloads: vec![(d, Some(to))],
+                    undo_agentdata: Vec::new(),
                 });
             }
             Err(e) => self.notify_text(format!("Couldn't move {}: {e}.", d.name()), true),
@@ -856,6 +1006,7 @@ impl AgentCleanup {
             undo_trail: Vec::new(),
             undo_junk: Vec::new(),
             undo_downloads: moved.into_iter().map(|d| (d, None)).collect(),
+            undo_agentdata: Vec::new(),
         });
     }
 
@@ -961,6 +1112,7 @@ impl AgentCleanup {
             undo_trail: moved,
             undo_junk: Vec::new(),
             undo_downloads: Vec::new(),
+            undo_agentdata: Vec::new(),
         });
     }
 
@@ -1156,6 +1308,7 @@ impl AgentCleanup {
             undo_trail: Vec::new(),
             undo_junk: Vec::new(),
             undo_downloads: Vec::new(),
+            undo_agentdata: Vec::new(),
         });
     }
 
@@ -1169,6 +1322,7 @@ impl AgentCleanup {
             if notice.undo.is_empty()
                 && notice.undo_trail.is_empty()
                 && notice.undo_downloads.is_empty()
+                && notice.undo_agentdata.is_empty()
             {
                 return;
             }
@@ -1208,6 +1362,22 @@ impl AgentCleanup {
                 Err(e) => failed.push(format!("{} ({e})", d.name())),
             }
         }
+        for o in notice.undo_agentdata {
+            let errs: Vec<String> = o
+                .paths
+                .iter()
+                .filter_map(|p| actions::restore(p).err().map(|e| e.to_string()))
+                .collect();
+            if errs.is_empty() {
+                restored += 1;
+                self.agentdata.items.push(o);
+            } else {
+                failed.push(format!("{} ({})", o.project_name(), errs.join(", ")));
+            }
+        }
+        self.agentdata
+            .items
+            .sort_by_key(|o| std::cmp::Reverse(o.size_bytes));
         self.downloads
             .items
             .sort_by_key(|d| std::cmp::Reverse(d.arrived));
@@ -1300,6 +1470,12 @@ impl AgentCleanup {
                 Page::Downloads,
             ))
             .child(item(
+                "nav-agentdata",
+                IconName::Ghost,
+                "Agent data: session history left from projects you deleted",
+                Page::AgentData,
+            ))
+            .child(item(
                 "nav-junk",
                 IconName::Package,
                 "Build junk: dependency and build folders one command can recreate",
@@ -1365,6 +1541,7 @@ impl Render for AgentCleanup {
                 Page::Leftovers => self.leftovers_page(window, cx).into_any_element(),
                 Page::Trail => self.trail_page(cx).into_any_element(),
                 Page::Downloads => self.downloads_page(cx).into_any_element(),
+                Page::AgentData => self.agentdata_page(cx).into_any_element(),
                 Page::Junk => self.junk_page(cx).into_any_element(),
                 Page::Updates => self.updates_page(cx).into_any_element(),
                 Page::Projects => self.projects_page(cx).into_any_element(),
