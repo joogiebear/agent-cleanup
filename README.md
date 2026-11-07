@@ -2,13 +2,13 @@
 
 A small, fast Windows app that finds the clutter AI coding agents (Claude Code, Codex and friends) leave behind: repos cloned "for testing" into random folders, stale clones in Downloads or `%TEMP%`, and scratch projects that never made it into your real project folders.
 
-It's written in Rust with [egui](https://github.com/emilk/egui), so it's a single native `.exe` with no installer, web engine or runtime.
+It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI framework behind the Zed editor, plus the [gpui-component](https://github.com/longbridge/gpui-kit) widgets. It's a single native `.exe` (about 30 MB) with no installer, web engine or runtime.
 
 ![Main window](docs/screenshot.png)
 
 ## How it works
 
-1. **You add your project folders.** Repos inside them are yours and are left alone. Any repo found elsewhere is a possible leftover.
+1. **You add your project folders** on the Projects page. Repos inside them are yours and are left alone. Any repo found elsewhere is a possible leftover.
 2. **It scans for repos** under your home folder, skipping dependency caches (`node_modules`, `target`, `.cargo` and so on) and everything in AppData except `AppData\Local\Temp`. Results are saved, so the app opens instantly next time.
 3. **It checks what's unsaved** using git, read-only: uncommitted changes, commits that aren't on any remote, stashes, and whether the repo has a remote at all.
 4. **It gives each repo a status:**
@@ -17,23 +17,23 @@ It's written in Rust with [egui](https://github.com/emilk/egui), so it's a singl
    - **Stray, recent:** outside your projects but used recently.
    - **In a project:** inside one of your project folders.
 
-Click any row to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
+The left rail switches between **Leftovers**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.
 
 ![Details panel](docs/details.png)
 
 ## Cleaning up
 
-- **Recycle** one repo from its row, or tick several (or use **Select all safe**) and choose **Recycle selected**.
+- **Clean up** recycles every repo marked safe in one go. You can also recycle one repo from its card (hover for the buttons), or tick several and choose **Recycle selected**.
 - **Undo** appears right after, and puts everything back where it was.
-- **Mark as project** tells the app a folder is your real work. **Hide** stops showing a repo.
-- Right-click a row for more options.
+- **It's a project** tells the app a folder is your real work. **Hide** stops showing a repo (unhide it on the Projects page).
+- Press Escape to close a dialog or the details panel.
 
 ## Safety
 
 - Nothing is ever permanently deleted. Recycle moves folders to the **Recycle Bin**.
 - Every removal asks first. If any repo has unsaved work, the dialog lists exactly what would be lost and you have to tick a box before the button unlocks.
 - If git can't read a repo, the app assumes it has unsaved work. It never guesses "safe".
-- Every move and restore is written to `actions.log` in `%APPDATA%\agent-cleanup\config\`, next to `config.toml`. Use **Open settings and action log** in the app to find it.
+- Every move and restore is written to `actions.log` in `%APPDATA%\agent-cleanup\config\`, next to `config.toml`, and shown on the Activity page.
 
 ![Confirm dialog](docs/confirm-dialog.png)
 
@@ -43,13 +43,15 @@ Click any row to see what's unsaved and what to do about it, for example "Run `g
 
 You also need [Git for Windows](https://git-scm.com/download/win) on your `PATH`.
 
-**Updates:** the app checks for a new release when it starts (you can turn this off in the left panel). When one is available, click **Update now** and it downloads the new version, swaps it in, and offers to restart.
+**Updates:** the app checks for a new release when it starts (you can turn this off in Settings). When one is available, click **Update now** and it downloads the new version, swaps it in, and offers to restart.
 
 **Build it yourself** with [Rust](https://rustup.rs):
 
 ```powershell
 cargo run --release
 ```
+
+On Linux you also need `libxkbcommon-dev`, `libxkbcommon-x11-dev` and `libwayland-dev`.
 
 ## Releasing
 
@@ -71,4 +73,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`) has no UI code and is unit tested. The window lives in `src/app.rs`.
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
