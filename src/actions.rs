@@ -64,6 +64,25 @@ pub fn open_folder(path: &Path) {
     let _ = std::process::Command::new(program).arg(path).spawn();
 }
 
+/// Shows a file or folder selected in File Explorer (or opens its parent
+/// folder elsewhere). Never opens the file itself.
+pub fn reveal(path: &Path) {
+    #[cfg(windows)]
+    {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path);
+        let _ = std::process::Command::new("explorer").arg(arg).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        if path.is_dir() {
+            open_folder(path);
+        } else if let Some(parent) = path.parent() {
+            open_folder(parent);
+        }
+    }
+}
+
 /// Appends a line to `actions.log` next to the config file, so there's always
 /// a record of what was moved where.
 pub fn log_action(action: &str, path: &Path) {
