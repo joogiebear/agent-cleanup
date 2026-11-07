@@ -682,6 +682,7 @@ impl AgentCleanup {
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
                 .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
                 .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old repo to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
+                .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week needs a tick first in case the project only moved."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
@@ -791,7 +792,8 @@ impl AgentCleanup {
         let can_undo = !n.undo.is_empty()
             || !n.undo_trail.is_empty()
             || !n.undo_junk.is_empty()
-            || !n.undo_downloads.is_empty();
+            || !n.undo_downloads.is_empty()
+            || !n.undo_agentdata.is_empty();
         Some(
             div()
                 .absolute()
@@ -883,6 +885,25 @@ impl AgentCleanup {
                     }
                 })
                 .collect()
+        } else if c.what == ConfirmFor::AgentData {
+            c.paths
+                .iter()
+                .filter_map(|p| self.orphan(p))
+                .map(|o| {
+                    let risk = super::agentdata::recent_warning(o, now);
+                    Row {
+                        name: format!("{} ({})", o.project_name(), o.agent.label()),
+                        size: Some(o.size_bytes),
+                        icon: if risk.is_some() {
+                            IconName::TriangleAlert
+                        } else {
+                            IconName::Ghost
+                        },
+                        color: if risk.is_some() { ORANGE } else { GREEN },
+                        risk,
+                    }
+                })
+                .collect()
         } else if c.what == ConfirmFor::Downloads {
             c.paths
                 .iter()
@@ -950,6 +971,7 @@ impl AgentCleanup {
             ConfirmFor::Trail => "items",
             ConfirmFor::Junk => "folders",
             ConfirmFor::Downloads => "downloads",
+            ConfirmFor::AgentData => "session histories",
         };
         let title = if rows.len() == 1 {
             format!("Move \"{}\" to the Recycle Bin?", rows[0].name)
@@ -961,6 +983,12 @@ impl AgentCleanup {
                 "Each one is rebuilt by a single command, like npm install or cargo build. Empty the Recycle Bin afterwards to get the space back.",
                 "These projects are still in use:",
                 "I'll rebuild these when I need them",
+            )
+        } else if c.what == ConfirmFor::AgentData {
+            (
+                "Their projects are gone, so these sessions can't be resumed anyway. Empty the Recycle Bin afterwards to get the space back.",
+                "Used recently, so the project may have just moved:",
+                "I don't need these sessions",
             )
         } else if c.what == ConfirmFor::Downloads {
             (
@@ -1041,6 +1069,7 @@ impl AgentCleanup {
                         ConfirmFor::Trail => this.recycle_trail(&c.paths),
                         ConfirmFor::Junk => this.recycle_junk(&c.paths),
                         ConfirmFor::Downloads => this.recycle_downloads(&c.paths),
+                        ConfirmFor::AgentData => this.recycle_agentdata(&c.paths),
                     }
                 }
                 cx.notify();
