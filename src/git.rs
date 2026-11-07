@@ -65,6 +65,53 @@ impl GitState {
 }
 
 fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let out = run(repo, args.iter().map(std::ffi::OsStr::new))?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Which of `paths` (inside `repo`) git ignores. Tracked paths are never
+/// reported as ignored. Errors if git can't answer, so callers can treat
+/// "don't know" as "not ignored".
+pub fn ignored(
+    repo: &Path,
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rel: Vec<std::path::PathBuf> = paths
+        .iter()
+        .filter_map(|p| p.strip_prefix(repo).ok().map(Path::to_path_buf))
+        .collect();
+    let mut args: Vec<&std::ffi::OsStr> = vec!["check-ignore".as_ref(), "--".as_ref()];
+    args.extend(rel.iter().map(|p| p.as_os_str()));
+    let out = run(repo, args)?;
+    // 0: some are ignored, 1: none are, anything else: an error.
+    match out.status.code() {
+        Some(0) | Some(1) => {}
+        _ => bail!("{}", String::from_utf8_lossy(&out.stderr).trim()),
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let listed: Vec<&str> = text.lines().map(str::trim).collect();
+    Ok(rel
+        .iter()
+        .filter(|r| {
+            let r = r.to_string_lossy();
+            listed
+                .iter()
+                .any(|l| *l == r || l.replace('\\', "/") == r.replace('\\', "/"))
+        })
+        .map(|r| repo.join(r))
+        .collect())
+}
+
+fn run<'a>(
+    repo: &Path,
+    args: impl IntoIterator<Item = &'a std::ffi::OsStr>,
+) -> anyhow::Result<std::process::Output> {
     let mut cmd = Command::new("git");
     // safe.directory: read repos owned by other accounts (common for clones made
     // by tools running elevated) instead of failing with "dubious ownership".
@@ -81,17 +128,13 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let out = cmd.output().map_err(|e| {
+    cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!("Git isn't installed or isn't on PATH")
         } else {
             anyhow::Error::new(e).context("couldn't run git")
         }
-    })?;
-    if !out.status.success() {
-        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    })
 }
 
 pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {

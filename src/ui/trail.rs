@@ -38,7 +38,7 @@ fn kind_tip(kind: Kind) -> &'static str {
     }
 }
 
-fn empty_state(ic: IconName, title: &str, text: String) -> Div {
+pub fn empty_state(ic: IconName, title: &str, text: String) -> Div {
     v_flex()
         .items_center()
         .gap_2()
