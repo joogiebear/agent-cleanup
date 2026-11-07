@@ -36,6 +36,7 @@ gpui_kit::assets::icon_assets!(
         Footprints,
         FilePen,
         RefreshCw,
+        Package,
     ]
 );
 
