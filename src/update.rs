@@ -112,7 +112,7 @@ pub fn install(update: &Update, progress: impl Fn(u64, Option<u64>)) -> anyhow::
     }
     let exe = std::env::current_exe()?;
     // Download next to the exe so the final swap is a same-drive rename.
-    let tmp: PathBuf = exe.with_file_name("agent-cleanup.update.exe");
+    let tmp: PathBuf = exe.with_file_name(crate::footprint::UPDATE_DOWNLOAD);
     let result = download(update, &tmp, progress).and_then(|()| {
         self_replace::self_replace(&tmp)?;
         Ok(())
