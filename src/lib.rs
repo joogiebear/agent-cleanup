@@ -15,6 +15,7 @@ pub mod git;
 pub mod junk;
 pub mod library;
 pub mod model;
+pub mod prompts;
 pub mod scan;
 pub mod schedule;
 pub mod trail;

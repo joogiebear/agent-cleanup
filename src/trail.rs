@@ -154,6 +154,55 @@ impl Item {
     pub fn needs_care(&self) -> bool {
         !self.warnings().is_empty()
     }
+
+    /// The app's call on this item.
+    pub fn advice(&self) -> Advice {
+        if self.existed_before {
+            Advice::ProbablyYours
+        } else if self.needs_care() {
+            Advice::CheckFirst
+        } else {
+            Advice::Safe
+        }
+    }
+
+    /// Why the app thinks so and what removing it loses, in plain words.
+    pub fn explain(&self) -> String {
+        match self.advice() {
+            Advice::ProbablyYours => "It was already there before the agent changed it, so it's probably one of your own files (like a settings file). Keep it unless you know it's junk.".to_string(),
+            Advice::CheckFirst if self.is_repo() && self.git.is_none() => "The app couldn't look inside this project copy, so it can't tell whether it holds unsaved work. Open it and look before removing it.".to_string(),
+            Advice::CheckFirst => format!(
+                "This project copy has work that isn't saved anywhere else: {}. Removing it loses that work, so keep it unless you know you don't need it.",
+                self.warnings().join(", ")
+            ),
+            Advice::Safe => match self.kind {
+                Kind::Clone => "A copy of a project the agent downloaded to look at or test. Everything in it is saved online, so removing it loses nothing: it can be downloaded again.".to_string(),
+                Kind::Download => "A file the agent downloaded from the internet. Removing it only removes this copy; it can be downloaded again.".to_string(),
+                Kind::File | Kind::Edited => "A file the agent made outside its project, usually a scratch note, test script or output. If you asked for it (like a report you wanted), keep it. Otherwise it's safe to remove.".to_string(),
+            },
+        }
+    }
+}
+
+/// What the app recommends doing with a trail item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Advice {
+    /// Made by the agent, nothing unsaved in it: fine to recycle.
+    Safe,
+    /// A project copy with unsaved or unknown work.
+    CheckFirst,
+    /// Existed before the agent touched it.
+    ProbablyYours,
+}
+
+impl Advice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Advice::Safe => "Safe to clean",
+            Advice::CheckFirst => "Check first",
+            Advice::ProbablyYours => "Probably yours",
+        }
+    }
 }
 
 /// How far back the trail reads logs.
@@ -171,6 +220,22 @@ pub fn by_project(items: &[Item]) -> Vec<(PathBuf, Vec<&Item>)> {
     }
     groups.sort_by_key(|(_, v)| std::cmp::Reverse(v.iter().map(|i| i.size_bytes).sum::<u64>()));
     groups
+}
+
+/// A ready-to-paste agent prompt for one [`by_project`] group.
+pub fn prompt_for(project: &Path, items: &[&Item]) -> Option<String> {
+    let entries: Vec<_> = items
+        .iter()
+        .map(|i| {
+            let mut note = vec![
+                i.kind.label().to_lowercase(),
+                i.advice().label().to_lowercase(),
+            ];
+            note.extend(i.warnings());
+            crate::prompts::Entry::new(i.path.clone(), Some(note.join(", ")))
+        })
+        .collect();
+    crate::prompts::trail_group(project, &entries)
 }
 
 /// Items that look safe to recycle without a second look.
@@ -1075,5 +1140,58 @@ not json
             Some(UNIX_EPOCH + Duration::from_secs(1_794_072_223))
         );
         assert!(parse_iso8601("nope").is_none());
+    }
+
+    #[test]
+    fn advice_says_what_to_do() {
+        let base = Item {
+            path: PathBuf::from("/tmp/x"),
+            kind: Kind::Download,
+            agent: Agent::Codex,
+            project: PathBuf::from("/p"),
+            when: None,
+            is_dir: false,
+            size_bytes: 1,
+            git: None,
+            existed_before: false,
+        };
+        assert_eq!(base.advice(), Advice::Safe);
+        assert!(base.explain().contains("downloaded again"));
+
+        let mine = Item {
+            kind: Kind::Edited,
+            existed_before: true,
+            ..base.clone()
+        };
+        assert_eq!(mine.advice(), Advice::ProbablyYours);
+
+        let unknown = Item {
+            kind: Kind::Clone,
+            is_dir: true,
+            ..base.clone()
+        };
+        assert_eq!(unknown.advice(), Advice::CheckFirst);
+        assert!(unknown.explain().contains("couldn't look inside"));
+
+        let dirty = Item {
+            git: Some(GitState {
+                changed_files: 1,
+                remote_url: Some("r".into()),
+                ..Default::default()
+            }),
+            ..unknown.clone()
+        };
+        assert_eq!(dirty.advice(), Advice::CheckFirst);
+        assert!(dirty.explain().contains("1 edited file"));
+
+        let pushed = Item {
+            git: Some(GitState {
+                remote_url: Some("r".into()),
+                ..Default::default()
+            }),
+            ..unknown
+        };
+        assert_eq!(pushed.advice(), Advice::Safe);
+        assert!(safe_paths(&[pushed, dirty, mine, base]).len() == 2);
     }
 }
