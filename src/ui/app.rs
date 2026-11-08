@@ -299,6 +299,7 @@ impl AgentCleanup {
 
     fn save_cache(&self) {
         let cache = ScanCache {
+            format: agent_cleanup::cache::FORMAT,
             scanned_at: self.cached_at.unwrap_or_else(SystemTime::now),
             repos: self
                 .lib
