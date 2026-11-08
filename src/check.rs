@@ -94,6 +94,7 @@ pub fn run(cfg: &Config, home: Option<&Path>) -> Summary {
         .map(|p| scan::inspect_repo(p, cfg, &cancel))
         .collect();
     let _ = ScanCache {
+        format: crate::cache::FORMAT,
         scanned_at: now,
         repos: repos.clone(),
     }

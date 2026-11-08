@@ -10,7 +10,7 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
 
 1. **You add your project folders** on the Projects page. Repos inside them are yours and are left alone. Any repo found elsewhere is a possible leftover.
 2. **It scans for repos** under your home folder, skipping dependency caches (`node_modules`, `target`, `.cargo` and so on) and everything in AppData except `AppData\Local\Temp`. Results are saved, so the app opens instantly next time.
-3. **It checks what's unsaved** using git, read-only: uncommitted changes, commits that aren't on any remote, stashes, and whether the repo has a remote at all.
+3. **It checks what's unsaved** using git, read-only: uncommitted changes, commits that aren't on any remote, stashes, whether the repo has a remote at all, and files git ignores that nothing recreates (a `.env`, a local database, a `data/` folder). Those are never pushed, so even a fully pushed clone can hold the only copy. Ignored build output, dependencies, caches, logs and editor settings (`node_modules`, `target`, `__pycache__`, `*.log`, `.vscode`...) don't count.
 4. **It gives each repo a status:**
    - **Safe to remove:** outside your projects, unused for a while (14 days by default), and everything is pushed.
    - **Has unsaved work:** outside your projects, but something in it exists only on this PC.
@@ -58,7 +58,7 @@ A project on a drive or network share that isn't connected right now doesn't cou
 
 The **Duplicates** page groups the repos the scan found by their remote, so `https://github.com/me/tool.git`, `git@github.com:me/tool` and `~/AppData/Local/Temp/tool` cloned by an agent all count as one repo. In each group one copy is kept: the one in a project folder, otherwise the most recently used. Pin another copy to keep that one instead.
 
-**Clean up** recycles the extra copies that are outside your project folders and have nothing that exists only in that copy. A copy with uncommitted changes, unpushed commits or stashes is marked **Has unsaved work** and needs a tick before it can be recycled.
+**Clean up** recycles the extra copies that are outside your project folders and have nothing that exists only in that copy. A copy with uncommitted changes, unpushed commits, stashes or private ignored files is marked **Has unsaved work** and needs a tick before it can be recycled.
 
 ![Duplicates](docs/duplicates.png)
 

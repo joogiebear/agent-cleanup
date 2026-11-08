@@ -50,10 +50,10 @@ impl Verdict {
     pub fn explanation(self) -> &'static str {
         match self {
             Verdict::SafeToRemove => {
-                "A copy of a project outside your project folders. It hasn't been used in a while and everything in it is already saved online (for example on GitHub), so removing it loses nothing."
+                "A copy of a project outside your project folders. It hasn't been used in a while and everything in it is already saved online (for example on GitHub). The only things not online are files a command recreates, like downloaded packages and build output, so removing it loses nothing."
             }
             Verdict::UnsavedWork => {
-                "Outside your project folders, and some of its work is saved only on this PC. Removing it would lose that work, so check it first."
+                "Outside your project folders, and some of what's in it exists only on this PC: unsaved work, or private files git leaves out on purpose (like a .env with passwords, or a local database). Removing it would lose them, so check it first."
             }
             Verdict::Unreadable => {
                 "The app couldn't look inside it, so it can't tell whether it holds unsaved work. Copies in a temp folder are almost always throwaway copies an AI agent made. Anywhere else, open it and look first."
@@ -193,6 +193,14 @@ impl Repo {
                         .to_string(),
                 ),
                 _ => {}
+            }
+            if g.private_files_total > 0 {
+                steps.push(format!(
+                    "It has {} that git leaves out on purpose (listed in its .gitignore file), so {} never uploaded anywhere, even though everything else may be: {}. Files like these are often passwords and settings (.env) or a local database, and this folder may be the only copy. Open the folder and copy out any you still need before you recycle it. Don't upload them to GitHub: they can hold passwords.",
+                    if g.private_files_total == 1 { "1 file".to_string() } else { format!("{} files", g.private_files_total) },
+                    if g.private_files_total == 1 { "it was" } else { "they were" },
+                    g.private_files_preview(8)
+                ));
             }
         }
         match v {

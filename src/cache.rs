@@ -7,8 +7,15 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Bumped when what a scan records changes, so older results get rescanned
+/// instead of shown. 1: git-ignored private files are checked.
+pub const FORMAT: u32 = 1;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScanCache {
+    /// [`FORMAT`] when it was written; 0 for caches from before it existed.
+    #[serde(default)]
+    pub format: u32,
     pub scanned_at: SystemTime,
     pub repos: Vec<Repo>,
 }
@@ -30,6 +37,9 @@ impl ScanCache {
     /// re-classifying the rest against the current project folders.
     pub fn load_from(path: &Path, cfg: &Config) -> Option<Self> {
         let mut cache: Self = toml::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        if cache.format != FORMAT {
+            return None;
+        }
         cache
             .repos
             .retain(|r| r.inspected && r.path.join(".git").exists() && !cfg.is_ignored(&r.path));
@@ -76,6 +86,7 @@ mod tests {
 
         let file = tmp.path().join("cache.toml");
         ScanCache {
+            format: FORMAT,
             scanned_at: SystemTime::now(),
             repos: vec![a, gone],
         }
@@ -83,6 +94,11 @@ mod tests {
         .unwrap();
 
         let back = ScanCache::load_from(&file, &cfg).unwrap();
+        // A cache from before `format` existed is dropped, so it gets rescanned.
+        let old = tmp.path().join("old.toml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&old, text.replace("format = 1\n", "")).unwrap();
+        assert!(ScanCache::load_from(&old, &cfg).is_none());
         assert_eq!(back.repos.len(), 1);
         let r = &back.repos[0];
         assert_eq!(r.path, alive);
