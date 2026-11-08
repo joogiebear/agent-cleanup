@@ -9,6 +9,7 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GitState {
     /// Current branch, or `None` for a detached HEAD.
     pub branch: Option<String>,
@@ -21,7 +22,16 @@ pub struct GitState {
     pub remote_url: Option<String>,
     /// Newest commit on any branch.
     pub last_commit: Option<SystemTime>,
+    /// Files git is told to leave out (`.gitignore`) that no command brings
+    /// back, like `.env` or a local database: never committed, so never
+    /// uploaded. Relative to the repo, at most [`MAX_LISTED`] of them.
+    pub private_files: Vec<String>,
+    /// How many there are in all (`private_files` may be cut short).
+    pub private_files_total: usize,
 }
+
+/// How many private files to keep by name.
+pub const MAX_LISTED: usize = 20;
 
 impl GitState {
     /// Anything that exists only on this PC and would be lost if the folder went away.
@@ -30,6 +40,23 @@ impl GitState {
             || self.unpushed_commits > 0
             || self.stashes > 0
             || self.remote_url.is_none()
+            || self.private_files_total > 0
+    }
+
+    /// Up to `n` private file names, with "and N more" when there are more.
+    pub fn private_files_preview(&self, n: usize) -> String {
+        let mut s = self
+            .private_files
+            .iter()
+            .take(n)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let shown = self.private_files.len().min(n);
+        if self.private_files_total > shown {
+            s.push_str(&format!(" and {} more", self.private_files_total - shown));
+        }
+        s
     }
 
     /// Plain-language list of what would be lost, for warnings.
@@ -63,6 +90,13 @@ impl GitState {
         }
         if self.remote_url.is_none() {
             out.push("not online anywhere, so this folder is the only copy".to_string());
+        }
+        if self.private_files_total > 0 {
+            out.push(format!(
+                "{} git leaves out on purpose, so only on this PC ({})",
+                plural(self.private_files_total, "1 file", "files"),
+                self.private_files_preview(3)
+            ));
         }
         out
     }
@@ -206,10 +240,19 @@ pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
             "--porcelain=v2",
             "--branch",
             "--untracked-files=normal",
+            // List ignored files too, but stop at an ignored folder instead
+            // of walking into it (node_modules can hold 100,000 files).
+            "--ignored=matching",
         ],
     )
     .map_err(|e| anyhow::anyhow!("{}", explain_git_error(&e.to_string())))?;
     let (branch, changed_files) = parse_status_v2(&status);
+    let private: Vec<String> = parse_ignored(&status)
+        .into_iter()
+        .filter(|p| !is_disposable(repo, p))
+        .collect();
+    let private_files_total = private.len();
+    let private_files = private.into_iter().take(MAX_LISTED).collect();
 
     let remotes = git(repo, &["remote", "-v"]).unwrap_or_default();
     let remote_url = parse_first_remote(&remotes).map(|u| redact_credentials(&u));
@@ -243,7 +286,138 @@ pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
         stashes,
         remote_url,
         last_commit,
+        private_files,
+        private_files_total,
     })
+}
+
+/// Ignored entries (`! path`) from `git status --porcelain=v2 --ignored`.
+/// Folders keep their trailing `/`.
+pub fn parse_ignored(s: &str) -> Vec<String> {
+    s.lines()
+        .filter_map(|l| l.strip_prefix("! "))
+        .map(|p| {
+            // git quotes paths with unusual characters.
+            let p = p.trim();
+            p.strip_prefix('"')
+                .and_then(|p| p.strip_suffix('"'))
+                .unwrap_or(p)
+                .to_string()
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Folders that tools recreate or that only hold editor and agent settings.
+const DISPOSABLE_DIRS: &[&str] = &[
+    // Dependencies and build output: one command brings them back.
+    "node_modules",
+    "bower_components",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".parcel-cache",
+    ".angular",
+    ".expo",
+    ".docusaurus",
+    ".vercel",
+    ".netlify",
+    ".cache",
+    ".nyc_output",
+    ".sass-cache",
+    ".dart_tool",
+    ".gradle",
+    ".terraform",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+    "bin",
+    "obj",
+    "vendor",
+    "Pods",
+    "DerivedData",
+    "storybook-static",
+    // Editor settings.
+    ".idea",
+    ".vs",
+    ".vscode",
+];
+
+/// File endings for logs, caches, compiled output and OS clutter.
+const DISPOSABLE_EXTS: &[&str] = &[
+    "log",
+    "pyc",
+    "pyo",
+    "class",
+    "o",
+    "obj",
+    "pdb",
+    "ilk",
+    "tsbuildinfo",
+    "swp",
+    "swo",
+    "tmp",
+];
+
+const DISPOSABLE_FILES: &[&str] = &[
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    ".eslintcache",
+    ".stylelintcache",
+    "settings.local.json",
+];
+
+/// True for ignored paths that are safe to lose: build output, caches, logs,
+/// editor settings. Everything else git ignores (`.env`, `*.db`, `data/`...)
+/// may be the only copy of something.
+pub fn is_disposable(repo: &Path, rel: &str) -> bool {
+    let rel = rel.trim_end_matches('/');
+    let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let Some(name) = parts.last() else {
+        return true;
+    };
+    let dir_hit = parts.iter().any(|p| {
+        DISPOSABLE_DIRS.iter().any(|d| d.eq_ignore_ascii_case(p))
+            || p.to_ascii_lowercase().ends_with(".egg-info")
+    });
+    if dir_hit {
+        return true;
+    }
+    // `env` is often a Python virtual env, but only trust it with the marker.
+    if name.eq_ignore_ascii_case("env") && repo.join(rel).join("pyvenv.cfg").is_file() {
+        return true;
+    }
+    if DISPOSABLE_FILES
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(name))
+    {
+        // `settings.local.json` only counts in an agent's settings folder.
+        return !name.eq_ignore_ascii_case("settings.local.json")
+            || parts.iter().any(|p| p.eq_ignore_ascii_case(".claude"));
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with('~')
+        || lower.starts_with("npm-debug.log")
+        || lower.starts_with("yarn-error.log")
+    {
+        return true;
+    }
+    match lower.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => DISPOSABLE_EXTS.contains(&ext),
+        _ => false,
+    }
 }
 
 /// Parses `git status --porcelain=v2 --branch` into (branch, changed entry count).
@@ -324,6 +498,83 @@ mod tests {
         assert!(
             GitState::default().has_local_work(),
             "no remote counts as local work"
+        );
+    }
+
+    #[test]
+    fn spots_ignored_files_that_are_the_only_copy() {
+        let s = "# branch.head main\n! .env\n! node_modules/\n! \"we\\\"ird.db\"\n? new.txt\n";
+        assert_eq!(
+            parse_ignored(s),
+            vec![".env", "node_modules/", "we\\\"ird.db"]
+        );
+        assert_eq!(parse_status_v2(s).1, 1, "ignored files aren't edits");
+
+        let repo = Path::new("/nowhere");
+        for junk in [
+            "node_modules/",
+            "packages/app/node_modules/",
+            "target/",
+            "src/__pycache__/",
+            "debug.log",
+            "app/foo.pyc",
+            ".DS_Store",
+            "Thumbs.db",
+            "pkg.egg-info/",
+            ".claude/settings.local.json",
+            ".vscode/",
+            "tsconfig.tsbuildinfo",
+        ] {
+            assert!(is_disposable(repo, junk), "{junk} should be disposable");
+        }
+        for keep in [
+            ".env",
+            ".env.local",
+            "app.db",
+            "db.sqlite3",
+            "data/",
+            "uploads/",
+            "secrets.json",
+            "terraform.tfstate",
+            "env/",
+            "settings.local.json",
+        ] {
+            assert!(!is_disposable(repo, keep), "{keep} may be the only copy");
+        }
+    }
+
+    #[test]
+    fn inspect_lists_private_ignored_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = tmp.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(r)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            )
+        };
+        git(&["init", "-q"]);
+        std::fs::write(r.join(".gitignore"), "node_modules/\n.env\n*.db\n*.log\n").unwrap();
+        std::fs::create_dir_all(r.join("node_modules/x")).unwrap();
+        std::fs::write(r.join("node_modules/x/a.js"), "").unwrap();
+        std::fs::write(r.join("run.log"), "").unwrap();
+        std::fs::write(r.join(".env"), "KEY=1").unwrap();
+        std::fs::write(r.join("app.db"), "").unwrap();
+        let g = inspect(r).unwrap();
+        assert_eq!(g.private_files, vec![".env", "app.db"]);
+        assert_eq!(g.private_files_total, 2);
+        assert!(g.has_local_work());
+        assert!(
+            g.local_work_reasons().iter().any(
+                |r| r == "2 files git leaves out on purpose, so only on this PC (.env, app.db)"
+            ),
+            "{:?}",
+            g.local_work_reasons()
         );
     }
 

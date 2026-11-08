@@ -173,6 +173,7 @@ mod tests {
                 stashes: 0,
                 remote_url: Some(remote.into()),
                 last_commit: None,
+                ..Default::default()
             }),
             error: None,
             size_bytes: Some(100),

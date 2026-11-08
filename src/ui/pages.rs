@@ -818,7 +818,7 @@ impl AgentCleanup {
                 ))
                 .child(block(IconName::FolderHeart, ACCENT, "1. Tell it where your projects are", "Add the folders that hold your real work on the Projects page. Anything inside them is yours and won't be flagged."))
                 .child(block(IconName::Scan, BLUE, "2. It looks for project copies", "It searches your home folder for git repos: project folders whose history is tracked by git. That's what AI tools create when they download or start a project. Results are saved, so it opens instantly next time."))
-                .child(block(IconName::GitBranch, ORANGE, "3. It checks what's unsaved", "For each one it checks, without changing anything, whether it holds work that isn't saved anywhere else: edits that were never saved into its history, saved versions that were never uploaded, or a project that isn't online at all."))
+                .child(block(IconName::GitBranch, ORANGE, "3. It checks what's unsaved", "For each one it checks, without changing anything, whether it holds work that isn't saved anywhere else: edits that were never saved into its history, saved versions that were never uploaded, a project that isn't online at all, or private files git leaves out on purpose (like a .env file with passwords, or a local database), which are never uploaded. Downloaded packages and build output don't count: a command brings them back."))
                 .child(
                     card()
                         .p_5()
@@ -1413,7 +1413,7 @@ impl AgentCleanup {
 }
 
 /// Plain-language meanings for the words the app can't avoid.
-const GLOSSARY: [(&str, &str); 10] = [
+const GLOSSARY: [(&str, &str); 11] = [
     (
         "Repo",
         "Short for repository: a project folder whose history is tracked by git. Most of what this app finds are repos.",
@@ -1437,6 +1437,10 @@ const GLOSSARY: [(&str, &str); 10] = [
     (
         "Stash",
         "Changes set aside for later inside a repo. They live only in that folder.",
+    ),
+    (
+        "Ignored files (.gitignore)",
+        "Files a repo tells git to leave out on purpose, listed in its .gitignore file. Some are clutter a command recreates, like node_modules. Others are private, like a .env file with passwords or a local database. Those are never uploaded, so the folder may hold the only copy.",
     ),
     (
         "Agent, session",
