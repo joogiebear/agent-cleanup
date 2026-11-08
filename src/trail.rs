@@ -115,6 +115,10 @@ pub struct Item {
     /// It was on disk before the agent first touched it: an edited file, or
     /// one whose creation time is older than the session's first mention.
     pub existed_before: bool,
+    /// Private-looking files in it (or the file itself), like `.env` or a
+    /// database, when git can't vouch for the folder. See [`crate::private`].
+    pub private_files: Vec<String>,
+    pub private_files_total: usize,
 }
 
 impl Item {
@@ -148,6 +152,16 @@ impl Item {
                 Some(g) => out.extend(g.local_work_reasons()),
             }
         }
+        if self.private_files_total > 0 {
+            out.push(if self.is_dir {
+                format!(
+                    "it holds private files that may be the only copy ({})",
+                    crate::private::preview(&self.private_files, self.private_files_total, 3)
+                )
+            } else {
+                "it looks like a private file (passwords, a key or a database) that may be the only copy".to_string()
+            });
+        }
         out
     }
 
@@ -171,6 +185,10 @@ impl Item {
         match self.advice() {
             Advice::ProbablyYours => "It was already there before the agent changed it, so it's probably one of your own files (like a settings file). Keep it unless you know it's junk.".to_string(),
             Advice::CheckFirst if self.is_repo() && self.git.is_none() => "The app couldn't look inside this project copy, so it can't tell whether it holds unsaved work. Open it and look before removing it.".to_string(),
+            Advice::CheckFirst if !self.is_repo() => format!(
+                "Take a look before removing this: {}. Files like these hold passwords, keys or data you can't download again. Copy out anything you need first.",
+                self.warnings().join(", ")
+            ),
             Advice::CheckFirst => format!(
                 "This project copy has work that isn't saved anywhere else: {}. Removing it loses that work, so keep it unless you know you don't need it.",
                 self.warnings().join(", ")
@@ -886,6 +904,8 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                             size_bytes: 0,
                             git: None,
                             existed_before: false,
+                            private_files: Vec::new(),
+                            private_files_total: 0,
                         },
                     );
                 }
@@ -933,8 +953,16 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                     it.git = git::inspect(&it.path).ok();
                     it.kind = Kind::Clone;
                 }
+                // git already lists a readable repo's private files.
+                if it.git.is_none() {
+                    (it.private_files, it.private_files_total) = crate::private::find(&it.path);
+                }
             } else {
                 it.size_bytes = meta.len();
+                if crate::private::looks_private(&it.name()) {
+                    it.private_files = vec![it.name()];
+                    it.private_files_total = 1;
+                }
             }
             Some(it)
         })
@@ -1154,6 +1182,8 @@ not json
             size_bytes: 1,
             git: None,
             existed_before: false,
+            private_files: Vec::new(),
+            private_files_total: 0,
         };
         assert_eq!(base.advice(), Advice::Safe);
         assert!(base.explain().contains("downloaded again"));
@@ -1164,6 +1194,27 @@ not json
             ..base.clone()
         };
         assert_eq!(mine.advice(), Advice::ProbablyYours);
+
+        let key = Item {
+            kind: Kind::File,
+            private_files: vec!["server.key".into()],
+            private_files_total: 1,
+            ..base.clone()
+        };
+        assert_eq!(
+            key.advice(),
+            Advice::CheckFirst,
+            "a private file is never one-click clean"
+        );
+        let folder = Item {
+            kind: Kind::File,
+            is_dir: true,
+            private_files: vec![".env".into()],
+            private_files_total: 1,
+            ..base.clone()
+        };
+        assert_eq!(folder.advice(), Advice::CheckFirst);
+        assert!(folder.explain().contains(".env"), "{}", folder.explain());
 
         let unknown = Item {
             kind: Kind::Clone,

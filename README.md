@@ -93,7 +93,9 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 ## Safety
 
 - Nothing is ever permanently deleted. Recycle moves folders to the **Recycle Bin**.
-- Every removal asks first. If any repo has unsaved work, the dialog lists exactly what would be lost and you have to tick a box before the button unlocks.
+- Every removal asks first. If any item has unsaved work, the dialog lists exactly what would be lost. When the selection is a mix, the main button recycles only the safe ones; taking the rest too needs a ticked box.
+- Private-looking files (`.env`, keys, certificates, password stores, databases) are never cleaned in one click: in repos git ignores them in, in agent-made folders that aren't repos, in repos git can't read (so the Temp folder "select all" skips those) and in Downloads.
+- Ignored folders named `build`, `dist`, `out`, `bin`, `obj`, `target` or `vendor` only count as rebuildable when the matching build file is right beside them.
 - If git can't read a repo, the app assumes it has unsaved work. It never guesses "safe".
 - Every move and restore is written to `actions.log` in `%APPDATA%\agent-cleanup\config\`, next to `config.toml`, and shown on the Activity page.
 
