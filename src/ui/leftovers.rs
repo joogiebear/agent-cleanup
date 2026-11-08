@@ -480,6 +480,53 @@ impl AgentCleanup {
             );
         }
 
+        // Hand the current view to an agent.
+        if !rows.is_empty() && self.scan.is_none() && self.filter != Filter::All {
+            let n = rows.len();
+            let paths = rows.clone();
+            let filter = self.filter;
+            body = body.child(
+                h_flex()
+                    .gap_3()
+                    .px_4()
+                    .py_1p5()
+                    .rounded(px(10.))
+                    .bg(CARD)
+                    .child(icon(IconName::Bot, 16., ACCENT))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.))
+                            .text_color(MUTED)
+                            .child(format!(
+                                "Rather have your AI agent deal with {}? Copy a prompt that lists {} and says what to do.",
+                                if n == 1 { "this one" } else { "these" },
+                                if n == 1 { "it".to_string() } else { format!("all {n}") }
+                            )),
+                    )
+                    .child(prompt_button("lo-prompt").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            let entries: Vec<_> = paths
+                                .iter()
+                                .filter_map(|p| this.lib.get(p))
+                                .map(|r| {
+                                    let note = match (&r.error, &r.git) {
+                                        (Some(e), _) => Some(e.clone()),
+                                        (None, Some(g)) => Some(g.local_work_reasons().join(", ")),
+                                        (None, None) => None,
+                                    };
+                                    agent_cleanup::prompts::Entry::new(r.path.clone(), note)
+                                })
+                                .collect();
+                            let p = agent_cleanup::prompts::leftovers(filter, &entries);
+                            this.copy_prompt(p, cx);
+                            cx.notify();
+                        },
+                    ))),
+            );
+        }
+
         // The list.
         if rows.is_empty() {
             let (title, sub) = if self.scan.is_some() {

@@ -65,6 +65,17 @@ impl AgentCleanup {
         let summary = (a.loaded && !a.items.is_empty()).then(|| {
             let total: u64 = a.items.iter().map(|o| o.size_bytes).sum();
             let sessions: usize = a.items.iter().map(|o| o.sessions).sum();
+            let entries: Vec<_> = a
+                .items
+                .iter()
+                .map(|o| {
+                    agent_cleanup::prompts::Entry::new(
+                        o.project.clone(),
+                        Some(format!("{} history", o.agent.label())),
+                    )
+                })
+                .collect();
+            let prompt = agent_cleanup::prompts::agentdata(&entries);
             let n_safe = safe.len();
             let n_recent = a.items.len() - n_safe;
             let headline = if n_safe > 0 {
@@ -127,6 +138,7 @@ impl AgentCleanup {
                 .child(
                     h_flex()
                         .flex_wrap()
+                        .items_center()
                         .gap_x_4()
                         .text_size(px(12.))
                         .text_color(FAINT)
@@ -145,7 +157,14 @@ impl AgentCleanup {
                                 "{sessions} chat session{}",
                                 if sessions == 1 { "" } else { "s" }
                             ),
-                        )),
+                        ))
+                        .child(div().flex_1())
+                        .child(prompt_button("ad-prompt").on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.copy_prompt(prompt.clone(), cx);
+                                cx.notify();
+                            },
+                        ))),
                 )
         });
 

@@ -26,7 +26,9 @@ The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **
 
 Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sessions`). The **Agent trail** page reads the last 90 days of those logs, read-only, and lists what an agent made outside the folder it was working in: files it wrote, things it downloaded with `curl` or `wget`, and repos it cloned. Items are grouped by the project the agent was working on, with which agent did it and when.
 
-Files an agent only *changed* (say, your `.bashrc`), files that are older than the session, and clones with unsaved git work are marked **Check first**. They need a tick before they can be recycled, and **Clean up** leaves them out.
+Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work, or one git can't read) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
+
+Downloads, Agent data, Duplicates and Build junk work the same way: a verdict tag and reason on every item, and a banner that says what's safe and what you'd lose.
 
 ![Agent trail](docs/trail.png)
 
@@ -86,6 +88,7 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 - **Undo** appears right after, and puts everything back where it was.
 - **It's a project** tells the app a folder is your real work. **Hide** stops showing a repo (unhide it on the Projects page).
 - Press Escape to close a dialog or the details panel.
+- **Copy prompt for your agent** (on Leftovers views and on each group of the other pages) copies a ready-to-paste request for Claude Code or Codex: it lists those items with the app's notes and asks the agent to save unsaved work, explain what things are, or move files into their project. It tells the agent not to delete anything, and only includes paths and notes shown on the page, never remote URLs.
 
 ## Safety
 

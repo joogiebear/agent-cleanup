@@ -1226,6 +1226,18 @@ impl AgentCleanup {
         self.needs_rescan = true;
     }
 
+    /// Puts a ready-to-paste agent prompt on the clipboard.
+    pub fn copy_prompt(&mut self, prompt: Option<String>, cx: &mut Context<Self>) {
+        let Some(text) = prompt else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.notify_text(
+            "Prompt copied. Paste it into Claude Code or Codex, in any folder.",
+            false,
+        );
+    }
+
     pub fn copy_path(&mut self, p: &Path, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string()));
         self.notify_text("Path copied.", false);
