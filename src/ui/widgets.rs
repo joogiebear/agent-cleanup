@@ -227,3 +227,76 @@ impl Tip for Stateful<Div> {
         self.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
     }
 }
+
+/// A small coloured tag with the app's call on an item, like "Safe to clean".
+pub fn verdict_tag(
+    id: impl Into<ElementId>,
+    color: Rgba,
+    ic: IconName,
+    text: impl Into<SharedString>,
+    tip: impl Into<SharedString>,
+) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .flex_none()
+        .gap_1()
+        .px_2()
+        .py(px(2.))
+        .rounded_full()
+        .bg(tint(color, 0.14))
+        .text_color(color)
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .child(icon(ic, 12., color))
+        .child(text.into())
+        .tip(tip)
+}
+
+/// The box at the top of a page that says what the app recommends: a
+/// headline, why, optional tags, and an optional action button.
+pub fn advice_banner(
+    color: Rgba,
+    ic: IconName,
+    headline: impl Into<SharedString>,
+    text: impl Into<SharedString>,
+    tags: Option<Div>,
+    action: Option<Stateful<Div>>,
+) -> Div {
+    h_flex()
+        .gap_4()
+        .px_5()
+        .py_4()
+        .rounded(px(12.))
+        .bg(tint(color, 0.10))
+        .border_1()
+        .border_color(tint(color, 0.35))
+        .child(icon(ic, 24., color))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(16.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(headline.into()),
+                )
+                .child(
+                    div()
+                        .text_color(MUTED)
+                        .text_size(px(13.))
+                        .child(text.into()),
+                )
+                .children(tags),
+        )
+        .children(action.map(|a| a.flex_none().h(px(40.)).px_5()))
+}
+
+/// "Copy prompt for your agent": the caller adds the click handler.
+pub fn prompt_button(id: impl Into<ElementId>) -> Stateful<Div> {
+    icon_button(id, IconName::Bot, "Copy prompt for your agent", ButtonKind::Ghost)
+        .flex_none()
+        .h(px(28.))
+        .tip("Copies a request you can paste into Claude Code or Codex. It lists these items, says what to do with them, and tells the agent not to delete anything. It only includes the paths you see here.")
+}

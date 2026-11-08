@@ -202,6 +202,26 @@ impl AgentCleanup {
                 cx.notify();
             }))
         });
+        let prompt = {
+            let pk: Vec<_> = r
+                .packages
+                .iter()
+                .map(|p| agent_cleanup::prompts::Package {
+                    name: &p.name,
+                    current: &p.current,
+                    target: p.latest.as_deref().unwrap_or(&p.wanted),
+                })
+                .collect();
+            agent_cleanup::prompts::updates(&r.repo, r.eco.label(), &pk)
+        };
+        let prompt_btn = prompt.is_some().then(|| {
+            prompt_button(SharedString::from(format!("upd-prompt-{key}"))).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.copy_prompt(prompt.clone(), cx);
+                    cx.notify();
+                },
+            ))
+        });
         let mut list = v_flex().px_4().pb_3();
         for p in r.packages.iter().take(SHOWN) {
             list = list.child(package_row(p));
@@ -255,6 +275,7 @@ impl AgentCleanup {
                                     .child(summary),
                             ),
                     )
+                    .children(prompt_btn)
                     .children(action),
             )
             .when(!r.packages.is_empty(), |c| {
