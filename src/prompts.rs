@@ -67,8 +67,8 @@ pub fn leftovers(filter: Filter, entries: &[Entry]) -> Option<String> {
     }
     let (intro, task) = match filter {
         Filter::UnsavedWork => (
-            "These folders on my PC are copies of git repositories that have work not saved anywhere else (edits that aren't committed, commits that aren't pushed, stashes, or no online copy at all). Many were probably made by an AI coding agent:",
-            "For each one, look at what's unsaved and tell me in plain words what it is. If it's real work worth keeping, commit it and push it to its existing remote. If it has no remote, ask me whether to create one. If it's just a throwaway experiment, say so, and leave it as it is so I can decide.",
+            "These folders on my PC are copies of git repositories that have work not saved anywhere else (edits that aren't committed, commits that aren't pushed, stashes, no online copy at all, or files git ignores on purpose like .env files and local databases). Many were probably made by an AI coding agent:",
+            "For each one, look at what's unsaved and tell me in plain words what it is. If it's real work worth keeping, commit it and push it to its existing remote. If it has no remote, ask me whether to create one. Never commit or upload files that git ignores (like .env files, which can hold passwords, or databases): tell me what each one is and whether it looks worth keeping, so I can copy it somewhere safe. If it's just a throwaway experiment, say so, and leave it as it is so I can decide.",
         ),
         Filter::Unreadable => (
             "Git can't read these folders on my PC, so I can't tell whether they hold unsaved work. The note after each one is the error git gave:",
@@ -76,7 +76,7 @@ pub fn leftovers(filter: Filter, entries: &[Entry]) -> Option<String> {
         ),
         Filter::SafeToRemove => (
             "These folders on my PC look like leftover copies of git repositories. Agent Cleanup says everything in them is already pushed and they haven't been used in a while:",
-            "Double-check each one: no uncommitted changes, no unpushed commits on any branch, no stashes. Tell me which are safe to delete and flag any that aren't, with the reason.",
+            "Double-check each one: no uncommitted changes, no unpushed commits on any branch, no stashes, and no files git ignores that exist only here, like .env files or local databases (downloaded packages and build output don't count). Tell me which are safe to delete and flag any that aren't, with the reason.",
         ),
         Filter::StrayActive => (
             "These git repositories on my PC are outside my main project folders but were used recently:",
@@ -84,7 +84,7 @@ pub fn leftovers(filter: Filter, entries: &[Entry]) -> Option<String> {
         ),
         Filter::Strays | Filter::All => (
             "These git repositories on my PC are outside my main project folders, and many were probably left behind by AI coding agents:",
-            "For each one, tell me what it is, whether anything in it isn't saved anywhere else, and whether it looks safe to delete. If something has real unsaved work, commit and push it to its existing remote.",
+            "For each one, tell me what it is, whether anything in it isn't saved anywhere else (including files git ignores, like .env files or local databases), and whether it looks safe to delete. If something has real unsaved work, commit and push it to its existing remote, but never commit or upload ignored files: they can hold passwords.",
         ),
     };
     Some(build(intro, entries, task))
