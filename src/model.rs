@@ -56,7 +56,7 @@ impl Verdict {
                 "Outside your project folders, but it has work that exists only on this PC. Review before removing."
             }
             Verdict::Unreadable => {
-                "Outside your project folders, but git couldn't read it, so it's treated as unsaved work. Often a broken or half-copied repo."
+                "Git couldn't read it, so the app can't tell whether it holds unsaved work. Copies in a temp folder are almost always throwaway agent clones. Anything else, open it and look first."
             }
             Verdict::StrayActive => "Outside your project folders, but it was used recently.",
             Verdict::InProject => "Inside one of your project folders.",
@@ -95,6 +95,12 @@ impl Repo {
         self.git.as_ref().is_none_or(GitState::has_local_work)
     }
 
+    /// Lives in a temp folder (like `AppData\Local\Temp`), where agents put
+    /// throwaway clones. A hint, not a guarantee.
+    pub fn in_temp_folder(&self) -> bool {
+        is_temp_path(&self.path, Some(&std::env::temp_dir()))
+    }
+
     pub fn is_stale(&self, stale_after_days: u32, now: SystemTime) -> bool {
         let limit = Duration::from_secs(u64::from(stale_after_days) * 86_400);
         match self.last_activity {
@@ -131,10 +137,28 @@ impl Repo {
             }
             _ => {}
         }
-        if let Some(e) = &self.error {
-            steps.push(format!("Git couldn't read this repo: {e}"));
+        if v == Verdict::Unreadable {
+            steps.push(match &self.error {
+                Some(e) => format!("Git couldn't read this repo: {e}"),
+                None => "Git couldn't read this repo.".to_string(),
+            });
+            if self.in_temp_folder() {
+                steps.push(
+                    "It's in a temp folder, which is where agents put throwaway copies. It's almost always fine to recycle."
+                        .to_string(),
+                );
+            } else {
+                steps.push(
+                    "Open the folder and look. If you see files you wrote or changed yourself, keep it, or copy them out first."
+                        .to_string(),
+                );
+                steps.push(
+                    "If it's just a copy of a project you have elsewhere or on GitHub, it's fine to recycle."
+                        .to_string(),
+                );
+            }
             steps.push(
-                "Open the folder and look before removing it. If it's a broken copy you don't need, recycle it; you can undo."
+                "Recycling moves it to the Recycle Bin, so you can restore it if you change your mind."
                     .to_string(),
             );
             return steps;
@@ -204,6 +228,23 @@ impl Repo {
             s
         }
     }
+}
+
+/// True if `path` is inside the system temp folder or any folder named
+/// `Temp` or `tmp`.
+pub fn is_temp_path(path: &Path, temp_dir: Option<&Path>) -> bool {
+    if let Some(t) = temp_dir
+        && !t.as_os_str().is_empty()
+        && path.starts_with(t)
+    {
+        return true;
+    }
+    path.parent().is_some_and(|parent| {
+        parent.components().any(|c| {
+            let n = c.as_os_str().to_string_lossy();
+            n.eq_ignore_ascii_case("temp") || n.eq_ignore_ascii_case("tmp")
+        })
+    })
 }
 
 /// Shortens paths under the home folder to `~\...` for display.
@@ -333,6 +374,38 @@ mod tests {
         let safe = inspected("/tmp/z", pushed, 30, &cfg, now).next_steps(&cfg, now);
         assert_eq!(safe.len(), 1);
         assert!(safe[0].starts_with("Nothing to save"));
+    }
+
+    #[test]
+    fn temp_folders_are_spotted() {
+        let t = Path::new("/sys-temp");
+        assert!(is_temp_path(Path::new("/sys-temp/clone"), Some(t)));
+        assert!(is_temp_path(
+            Path::new("/home/me/AppData/Local/Temp/royal/x"),
+            None
+        ));
+        assert!(is_temp_path(Path::new("/tmp/x"), None));
+        assert!(!is_temp_path(Path::new("/home/me/code/app"), Some(t)));
+        // The repo itself being called "temp" doesn't count.
+        assert!(!is_temp_path(Path::new("/home/me/code/temp"), None));
+    }
+
+    #[test]
+    fn unreadable_steps_depend_on_location() {
+        let cfg = Config::default();
+        let now = SystemTime::now();
+        let mut tmp = Repo::new(PathBuf::from("/x/Temp/clone"), &cfg);
+        tmp.inspected = true;
+        tmp.error = Some("not a git repository".into());
+        let steps = tmp.next_steps(&cfg, now);
+        assert!(steps[0].contains("not a git repository"));
+        assert!(steps.iter().any(|s| s.contains("temp folder")));
+        assert!(steps.last().unwrap().contains("Recycle Bin"));
+
+        let mut real = Repo::new(PathBuf::from("/x/code/app"), &cfg);
+        real.inspected = true;
+        let steps = real.next_steps(&cfg, now);
+        assert!(steps.iter().any(|s| s.contains("Open the folder")));
     }
 
     #[test]

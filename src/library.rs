@@ -276,6 +276,16 @@ impl Library {
             .collect()
     }
 
+    /// Repos git couldn't read that sit in a temp folder: almost always
+    /// throwaway agent clones.
+    pub fn unreadable_temp_paths(&self, cfg: &Config, now: SystemTime) -> Vec<PathBuf> {
+        self.repos
+            .iter()
+            .filter(|r| r.verdict(cfg, now) == Verdict::Unreadable && r.in_temp_folder())
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
     /// Ticked repos that still exist, in list order.
     pub fn checked_paths(&self) -> Vec<PathBuf> {
         self.repos
