@@ -33,6 +33,15 @@ impl AgentCleanup {
             this.load_junk();
             cx.notify();
         }));
+        let header = h_flex()
+            .items_end()
+            .gap_3()
+            .child(div().flex_1().min_w_0().child(page_header(
+                "Build junk",
+                "Folders of downloaded libraries and build files inside your projects, like node_modules. They're big, and the project can recreate them with one command when it's needed again.",
+            )))
+            .child(refresh);
+
         let clean = (!idle.is_empty() && !loading).then(|| {
             let btn = icon_button(
                 "junk-clean",
@@ -52,48 +61,58 @@ impl AgentCleanup {
                 }))
             }
         });
-        let header = h_flex()
-            .items_end()
-            .gap_3()
-            .child(div().flex_1().min_w_0().child(page_header(
-                "Build junk",
-                "Folders of downloaded libraries and build files inside your projects, like node_modules. They're big, and the project can recreate them with one command when it's needed again.",
-            )))
-            .child(refresh)
-            .children(clean);
-
         let summary = (j.loaded && !j.items.is_empty()).then(|| {
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_1()
-                .child(meta(
-                    IconName::Package,
-                    format!(
-                        "{} folder{}, {}",
-                        s.count,
-                        if s.count == 1 { "" } else { "s" },
-                        human_size(s.bytes)
-                    ),
-                ))
-                .child(meta(
-                    IconName::Clock,
-                    format!(
-                        "{} in projects untouched for {days}+ days",
-                        human_size(s.idle_bytes)
-                    ),
+            let headline = if s.idle_count > 0 {
+                format!(
+                    "{} can go from projects you haven't touched in {days}+ days",
+                    human_size(s.idle_bytes)
+                )
+            } else {
+                "All of this belongs to projects you're working on".to_string()
+            };
+            let text = if s.idle_count > 0 {
+                "These are downloaded libraries and build files, not your work. Removing them loses nothing: the next time the project is used, one command (shown on each row) downloads or builds them again. That just takes a few minutes."
+            } else {
+                "Removing these is still safe, since they can be rebuilt, but you'd wait for a rebuild the next time you use the project. The app only suggests cleaning projects you haven't touched for a while."
+            };
+            v_flex()
+                .gap_2()
+                .child(advice_banner(
+                    if s.idle_count > 0 { GREEN } else { BLUE },
+                    if s.idle_count > 0 { IconName::Sparkles } else { IconName::Info },
+                    headline,
+                    text,
+                    None,
+                    clean,
                 ))
                 .child(
-                    div()
-                        .id("junk-days")
+                    h_flex()
+                        .flex_wrap()
+                        .gap_x_4()
+                        .gap_y_1()
                         .text_size(px(12.))
-                        .text_color(ACCENT)
-                        .cursor_pointer()
-                        .child("Change in Settings")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.go(Page::Settings);
-                            cx.notify();
-                        })),
+                        .text_color(FAINT)
+                        .child(meta(
+                            IconName::Package,
+                            format!(
+                                "{} folder{}, {} in total",
+                                s.count,
+                                if s.count == 1 { "" } else { "s" },
+                                human_size(s.bytes)
+                            ),
+                        ))
+                        .child(
+                            div()
+                                .id("junk-days")
+                                .text_size(px(12.))
+                                .text_color(ACCENT)
+                                .cursor_pointer()
+                                .child(format!("Change the {days} days in Settings"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.go(Page::Settings);
+                                    cx.notify();
+                                })),
+                        ),
                 )
         });
 
@@ -205,7 +224,24 @@ impl AgentCleanup {
                                         .text_size(px(12.))
                                         .text_color(FAINT)
                                         .child(human_size(size)),
-                                ),
+                                )
+                                .child(if idle {
+                                    verdict_tag(
+                                        SharedString::from(format!("junk-tag-{}", repo.display())),
+                                        GREEN,
+                                        IconName::CircleCheck,
+                                        "Safe to clean",
+                                        "You haven't worked on this project in a while. Its build folders can go and will be rebuilt when needed.",
+                                    )
+                                } else {
+                                    verdict_tag(
+                                        SharedString::from(format!("junk-tag-{}", repo.display())),
+                                        BLUE,
+                                        IconName::Clock,
+                                        "In use",
+                                        "You worked on this recently. Removing these is safe, but the next run would have to rebuild them first.",
+                                    )
+                                }),
                         )
                         .child(card().child(list)),
                 );

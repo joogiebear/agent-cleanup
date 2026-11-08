@@ -39,19 +39,6 @@ impl AgentCleanup {
             }
             cx.notify();
         }));
-        let clean = (!safe.is_empty() && !scanning).then(|| {
-            icon_button(
-                "dup-clean",
-                IconName::Broom,
-                format!("Clean up {}", human_size(safe_bytes)),
-                ButtonKind::Primary,
-            )
-            .tip("Recycle the extra copies that are outside your projects and fully saved online. You'll see the list first.")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.ask_recycle_dupes(safe.clone());
-                cx.notify();
-            }))
-        });
         let header = h_flex()
             .items_end()
             .gap_3()
@@ -59,38 +46,57 @@ impl AgentCleanup {
                 "Duplicates",
                 "The same project downloaded (cloned) into more than one folder. Keep one copy and recycle the rest.",
             )))
-            .child(rescan)
-            .children(clean);
+            .child(rescan);
 
         let summary = (!groups.is_empty()).then(|| {
             let extras: usize = groups.iter().map(|g| g.copies.len() - 1).sum();
-            let bytes: u64 = groups
-                .iter()
-                .flat_map(|g| g.extras())
-                .filter_map(|p| self.lib.get(p).and_then(|r| r.size_bytes))
-                .sum();
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_1()
-                .text_size(px(13.))
-                .text_color(MUTED)
-                .child(meta(
-                    IconName::Copy,
-                    format!(
-                        "{} project{} downloaded more than once",
+            let n_safe = safe.len();
+            let headline = if n_safe > 0 {
+                format!(
+                    "{n_safe} extra cop{} can go, freeing {}",
+                    if n_safe == 1 { "y" } else { "ies" },
+                    human_size(safe_bytes)
+                )
+            } else {
+                "No extra copy is safe to clean on its own".to_string()
+            };
+            let text = if n_safe > 0 {
+                "For each project one copy is kept (marked Keeping). The extra copies marked Safe to clean have everything saved online, so the kept copy has it all and nothing is lost. Copies with unsaved work, or inside your project folders, are left alone."
+            } else {
+                "Every extra copy either has work that isn't saved anywhere else, or is inside one of your project folders. Save the work (or ask your agent to), then scan again."
+            };
+            let action = (n_safe > 0 && !scanning).then(|| {
+                let safe = safe.clone();
+                icon_button(
+                    "dup-clean",
+                    IconName::BroomSparkles,
+                    format!("Clean up {}", human_size(safe_bytes)),
+                    ButtonKind::Primary,
+                )
+                .tip("Recycle the extra copies marked Safe to clean. You'll see the list first.")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.ask_recycle_dupes(safe.clone());
+                    cx.notify();
+                }))
+            });
+            v_flex()
+                .gap_2()
+                .child(advice_banner(
+                    if n_safe > 0 { GREEN } else { ORANGE },
+                    if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
+                    headline,
+                    text,
+                    None,
+                    action,
+                ))
+                .child(
+                    div().text_size(px(12.)).text_color(FAINT).child(format!(
+                        "{} project{} on this PC more than once, {extras} extra cop{} in total",
                         groups.len(),
-                        if groups.len() == 1 { "" } else { "s" }
-                    ),
-                ))
-                .child(meta(
-                    IconName::HardDrive,
-                    format!(
-                        "{extras} extra cop{}, {}",
+                        if groups.len() == 1 { " is" } else { "s are" },
                         if extras == 1 { "y" } else { "ies" },
-                        human_size(bytes)
-                    ),
-                ))
+                    )),
+                )
         });
 
         let body: AnyElement = if self.lib.is_empty() {
@@ -189,26 +195,30 @@ impl AgentCleanup {
         let (label, color, tip): (&str, Rgba, String) = if keep {
             (
                 "Keeping",
-                GREEN,
-                "The copy to keep. Pick another with the pin button.".into(),
+                ACCENT,
+                "This is the copy that stays. To keep a different one, use the pin button on it."
+                    .into(),
             )
         } else if local_work {
             (
-                "Has unsaved work",
+                "Check first",
                 ORANGE,
-                format!("{}. Save it before recycling.", r.git_summary()),
+                format!(
+                    "It has work that isn't saved anywhere else ({}). Removing it would lose that, so save it first or keep this copy.",
+                    r.git_summary().to_lowercase()
+                ),
             )
         } else if r.project_root.is_some() {
             (
                 "In a project folder",
                 MUTED,
-                "It's in one of your project folders, so Clean up leaves it alone.".into(),
+                "It's in one of your project folders, so Clean up leaves it alone. Remove it yourself if you really don't need it.".into(),
             )
         } else {
             (
-                "Extra copy",
-                BLUE,
-                "Everything in it is saved online, so the copy you keep has it all.".into(),
+                "Safe to clean",
+                GREEN,
+                "An extra copy. Everything in it is saved online, so the copy you keep has it all and nothing is lost.".into(),
             )
         };
         let pill = h_flex()
@@ -224,7 +234,7 @@ impl AgentCleanup {
             .font_weight(FontWeight::MEDIUM)
             .when(keep, |d| d.child(icon(IconName::BadgeCheck, 12., color)))
             .child(label)
-            .tip(tip);
+            .tip(tip.clone());
 
         let mut facts = h_flex().flex_wrap().gap_x_3().gap_y_1().child(meta(
             IconName::HardDrive,
@@ -309,6 +319,7 @@ impl AgentCleanup {
                             )
                             .child(pill),
                     )
+                    .child(div().text_size(px(12.)).text_color(MUTED).child(tip))
                     .child(facts),
             )
             .child(actions)
