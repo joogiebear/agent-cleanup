@@ -5,7 +5,7 @@ use super::app::AgentCleanup;
 use super::theme::*;
 use super::widgets::*;
 use agent_cleanup::model::{human_size, relative_time};
-use agent_cleanup::trail::{self, Item, Kind};
+use agent_cleanup::trail::{self, Advice, Item, Kind};
 use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -36,6 +36,55 @@ fn kind_tip(kind: Kind) -> &'static str {
         Kind::File => "The agent created this file",
         Kind::Edited => "The agent changed this file, but it was already there",
     }
+}
+
+pub fn advice_color(a: Advice) -> Rgba {
+    match a {
+        Advice::Safe => GREEN,
+        Advice::CheckFirst => ORANGE,
+        Advice::ProbablyYours => BLUE,
+    }
+}
+
+fn advice_icon(a: Advice) -> IconName {
+    match a {
+        Advice::Safe => IconName::CircleCheck,
+        Advice::CheckFirst => IconName::TriangleAlert,
+        Advice::ProbablyYours => IconName::ShieldCheck,
+    }
+}
+
+fn advice_tip(a: Advice) -> &'static str {
+    match a {
+        Advice::Safe => {
+            "The agent made it outside its project and nothing in it is unsaved. Fine to remove."
+        }
+        Advice::CheckFirst => {
+            "A project copy with work that isn't saved anywhere else, or that the app couldn't look inside. Look before removing."
+        }
+        Advice::ProbablyYours => {
+            "It was there before the agent touched it, so it's probably yours. Keep it."
+        }
+    }
+}
+
+/// A small coloured tag with the app's call, e.g. "Safe to clean".
+pub fn advice_pill(id: impl Into<ElementId>, a: Advice, text: String) -> Stateful<Div> {
+    let color = advice_color(a);
+    h_flex()
+        .id(id)
+        .flex_none()
+        .gap_1()
+        .px_2()
+        .py(px(2.))
+        .rounded_full()
+        .bg(tint(color, 0.14))
+        .text_color(color)
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .child(icon(advice_icon(a), 12., color))
+        .child(text)
+        .tip(advice_tip(a))
 }
 
 pub fn empty_state(ic: IconName, title: &str, text: String) -> Div {
@@ -85,20 +134,6 @@ impl AgentCleanup {
             this.load_trail();
             cx.notify();
         }));
-        let clean = (!safe.is_empty() && !loading).then(|| {
-            icon_button(
-                "trail-clean",
-                IconName::Broom,
-                format!("Clean up {}", human_size(safe_bytes)),
-                ButtonKind::Primary,
-            )
-            .tip("Move everything without a warning to the Recycle Bin. You'll see the list first.")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.ask_recycle_trail(safe.clone());
-                cx.notify();
-            }))
-        });
-
         let header = h_flex()
             .items_end()
             .gap_3()
@@ -106,40 +141,118 @@ impl AgentCleanup {
                 "Agent trail",
                 "Files, downloads and project copies that Claude Code and Codex created outside the project they were working on.",
             )))
-            .child(refresh)
-            .children(clean);
+            .child(refresh);
 
         let summary = (t.loaded && !t.items.is_empty()).then(|| {
-            let care = t.items.iter().filter(|i| i.needs_care()).count();
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_1()
-                .text_size(px(13.))
-                .text_color(MUTED)
-                .child(meta(
-                    IconName::Footprints,
-                    format!(
-                        "{} thing{} left behind, {}",
-                        t.items.len(),
-                        if t.items.len() == 1 { "" } else { "s" },
-                        human_size(total)
-                    ),
-                ))
-                .when(care > 0, |d| {
-                    d.child(
-                        h_flex()
-                            .gap_1()
-                            .text_size(px(12.))
-                            .text_color(ORANGE)
-                            .child(icon(IconName::TriangleAlert, 13., ORANGE))
-                            .child(format!("{care} need a look first")),
-                    )
-                })
-                .child(meta(
-                    IconName::Logs,
-                    format!("From {} session logs, last {} days", t.logs, trail::DAYS),
-                ))
+            let count = |a: Advice| t.items.iter().filter(|i| i.advice() == a).count();
+            let (n_safe, n_check, n_mine) = (
+                count(Advice::Safe),
+                count(Advice::CheckFirst),
+                count(Advice::ProbablyYours),
+            );
+            let headline = if n_safe > 0 {
+                format!(
+                    "{n_safe} of {} can go, freeing {}",
+                    t.items.len(),
+                    human_size(safe_bytes)
+                )
+            } else {
+                "Nothing here is safe to clean on its own".to_string()
+            };
+            let text = if n_safe > 0 {
+                "An AI agent made these outside the project it was working on, and nothing in them is unsaved. Cleaning moves them to the Recycle Bin. It doesn't touch your projects or the agents' chat history."
+            } else {
+                "Everything here is either a project copy with unsaved work or a file that was probably yours already. Look at each one before removing it."
+            };
+            let mut tags = h_flex().flex_wrap().gap_2();
+            for (a, n) in [
+                (Advice::Safe, n_safe),
+                (Advice::CheckFirst, n_check),
+                (Advice::ProbablyYours, n_mine),
+            ] {
+                if n > 0 {
+                    tags = tags.child(advice_pill(
+                        SharedString::from(format!("trail-sum-{a:?}")),
+                        a,
+                        format!("{n} {}", a.label().to_lowercase()),
+                    ));
+                }
+            }
+            let accent = if n_safe > 0 { GREEN } else { ORANGE };
+            v_flex()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .gap_4()
+                        .px_5()
+                        .py_4()
+                        .rounded(px(12.))
+                        .bg(tint(accent, 0.10))
+                        .border_1()
+                        .border_color(tint(accent, 0.35))
+                        .child(icon(
+                            if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
+                            24.,
+                            accent,
+                        ))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(16.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(headline),
+                                )
+                                .child(div().text_color(MUTED).text_size(px(13.)).child(text))
+                                .child(tags),
+                        )
+                        .when(n_safe > 0 && !loading, |d| {
+                            let safe = safe.clone();
+                            d.child(
+                                icon_button(
+                                    "trail-clean",
+                                    IconName::BroomSparkles,
+                                    format!("Clean up {}", human_size(safe_bytes)),
+                                    ButtonKind::Primary,
+                                )
+                                .flex_none()
+                                .h(px(40.))
+                                .px_5()
+                                .tip("Move every item marked Safe to clean to the Recycle Bin. You'll see the list first, and you can undo.")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.ask_recycle_trail(safe.clone());
+                                    cx.notify();
+                                })),
+                            )
+                        }),
+                )
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_x_4()
+                        .text_size(px(12.))
+                        .text_color(FAINT)
+                        .child(meta(
+                            IconName::Footprints,
+                            format!(
+                                "{} thing{} left behind in total, {}",
+                                t.items.len(),
+                                if t.items.len() == 1 { "" } else { "s" },
+                                human_size(total)
+                            ),
+                        ))
+                        .child(meta(
+                            IconName::Logs,
+                            format!(
+                                "Found in {} chat histories from the last {} days",
+                                t.logs,
+                                trail::DAYS
+                            ),
+                        )),
+                )
         });
 
         let body: AnyElement = if !t.loaded {
@@ -175,10 +288,21 @@ impl AgentCleanup {
             let mut groups = v_flex().gap_5();
             for (project, items) in trail::by_project(&t.items) {
                 let size: u64 = items.iter().map(|i| i.size_bytes).sum();
+                let group_safe: Vec<_> = items
+                    .iter()
+                    .filter(|i| i.advice() == Advice::Safe)
+                    .map(|i| i.path.clone())
+                    .collect();
+                let group_safe_bytes: u64 = items
+                    .iter()
+                    .filter(|i| i.advice() == Advice::Safe)
+                    .map(|i| i.size_bytes)
+                    .sum();
+                let group_key = project.display().to_string();
                 let label = if project.as_os_str().is_empty() {
                     "Unknown folder".to_string()
                 } else {
-                    format!("While working in {}", self.short(&project))
+                    format!("Left by an agent working on {}", self.short(&project))
                 };
                 let mut list = v_flex();
                 for (i, it) in items.iter().enumerate() {
@@ -206,7 +330,24 @@ impl AgentCleanup {
                                         .text_size(px(11.))
                                         .text_color(FAINT)
                                         .child(human_size(size)),
-                                ),
+                                )
+                                .when(!group_safe.is_empty() && !loading, |d| {
+                                    let n = group_safe.len();
+                                    d.child(
+                                        button(
+                                            SharedString::from(format!("trail-gclean-{group_key}")),
+                                            format!("Clean {n} safe ({})", human_size(group_safe_bytes)),
+                                            ButtonKind::Ghost,
+                                        )
+                                        .flex_none()
+                                        .h(px(26.))
+                                        .tip("Recycle only the items in this group marked Safe to clean. You'll see the list first.")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.ask_recycle_trail(group_safe.clone());
+                                            cx.notify();
+                                        })),
+                                    )
+                                }),
                         )
                         .child(card().child(list)),
                 );
@@ -239,23 +380,12 @@ impl AgentCleanup {
             it.path.clone(),
             it.path.clone(),
         );
-        let care_pill = (!warnings.is_empty()).then(|| {
-            let tip = format!("Look before recycling: {}.", warnings.join(", "));
-            h_flex()
-                .id(SharedString::from(format!("care-{key}")))
-                .flex_none()
-                .gap_1()
-                .px_2()
-                .py(px(2.))
-                .rounded_full()
-                .bg(tint(ORANGE, 0.14))
-                .text_color(ORANGE)
-                .text_size(px(11.))
-                .font_weight(FontWeight::MEDIUM)
-                .child(icon(IconName::TriangleAlert, 12., ORANGE))
-                .child("Check first")
-                .tip(tip)
-        });
+        let advice = it.advice();
+        let pill = advice_pill(
+            SharedString::from(format!("care-{key}")),
+            advice,
+            advice.label().to_string(),
+        );
         let mut facts = h_flex()
             .flex_wrap()
             .gap_x_3()
@@ -320,7 +450,13 @@ impl AgentCleanup {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(it.name()),
                             )
-                            .children(care_pill),
+                            .child(pill),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(MUTED)
+                            .child(it.explain()),
                     )
                     .child(
                         div()
