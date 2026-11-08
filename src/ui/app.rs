@@ -175,6 +175,8 @@ pub struct AgentCleanup {
     pub search_text: String,
     pub focused: Option<PathBuf>,
     pub confirm: Option<Confirm>,
+    /// The "Remove all app data" dialog is open.
+    pub confirm_wipe: bool,
     pub notice: Option<Notice>,
     pub skipped_setup: bool,
     pub needs_rescan: bool,
@@ -229,6 +231,7 @@ impl AgentCleanup {
             search_text: String::new(),
             focused: None,
             confirm: None,
+            confirm_wipe: false,
             notice: None,
             skipped_setup: false,
             needs_rescan: false,
@@ -257,6 +260,8 @@ impl AgentCleanup {
         }
         // A moved exe would leave the weekly check pointing at nothing.
         std::thread::spawn(agent_cleanup::schedule::repair_if_moved);
+        // Temp files from an update or setup that was interrupted.
+        std::thread::spawn(agent_cleanup::footprint::sweep_leftovers);
         if let Some(cache) = cache {
             app.cached_at = Some(cache.scanned_at);
             app.lib = Library::new(cache.repos);
@@ -1152,6 +1157,19 @@ impl AgentCleanup {
         self.weekly = Some(schedule::status());
     }
 
+    /// Deletes everything the app keeps on this PC and closes it, so nothing
+    /// is saved again afterwards. On failure the app stays open and says why.
+    pub fn remove_all_data(&mut self) {
+        self.confirm_wipe = false;
+        match agent_cleanup::footprint::remove_all() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                self.notify_text(e.to_string(), true);
+                self.weekly = Some(schedule::status());
+            }
+        }
+    }
+
     /// Runs the background check now, as the scheduled task would.
     pub fn run_check_now(&mut self) {
         let started = std::env::current_exe().and_then(|exe| {
@@ -1422,7 +1440,9 @@ impl AgentCleanup {
         if ev.keystroke.key != "escape" {
             return;
         }
-        if self.confirm.is_some() {
+        if self.confirm_wipe {
+            self.confirm_wipe = false;
+        } else if self.confirm.is_some() {
             self.confirm = None;
         } else if self.focused.is_some() {
             self.focused = None;
@@ -1593,6 +1613,7 @@ impl Render for AgentCleanup {
             )
             .children(self.toast(cx))
             .children(self.confirm_dialog(cx))
+            .children(self.wipe_dialog(cx))
     }
 }
 

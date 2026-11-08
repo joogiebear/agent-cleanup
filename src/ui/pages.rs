@@ -568,7 +568,135 @@ impl AgentCleanup {
                                     agent_cleanup::actions::open_folder(&dir);
                                 }
                             })),
+                        ))
+                        .child(divider())
+                        .child(setting_row(
+                            "Remove all app data",
+                            "Deletes settings, the last scan, the action log and the weekly check task, then closes the app. Only the .exe is left, which you can delete yourself.",
+                            button("wipe", "Remove...", ButtonKind::Danger).on_click(cx.listener(|this, _, _, cx| {
+                                this.weekly = Some(agent_cleanup::schedule::status());
+                                this.confirm_wipe = true;
+                                cx.notify();
+                            })),
                         )),
+                ),
+        )
+    }
+
+    /// Confirms "Remove all app data", listing exactly what goes.
+    pub fn wipe_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        use agent_cleanup::schedule::Status;
+        if !self.confirm_wipe {
+            return None;
+        }
+        let dir = agent_cleanup::footprint::data_dir();
+        let mut rows: Vec<(IconName, String, String)> = dir
+            .as_deref()
+            .map(agent_cleanup::footprint::data_files)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(p, size)| {
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                (IconName::File, name, human_size(size))
+            })
+            .collect();
+        if matches!(self.weekly, Some(Status::On | Status::OtherCopy)) {
+            rows.push((
+                IconName::Clock,
+                "Weekly check (Task Scheduler)".into(),
+                String::new(),
+            ));
+        }
+        let mut list = v_flex().gap_1();
+        if rows.is_empty() {
+            list = list.child(div().text_color(MUTED).child("Nothing is saved yet."));
+        }
+        for (ic, name, size) in rows {
+            list = list.child(
+                h_flex()
+                    .gap_2()
+                    .child(icon(ic, 14., MUTED))
+                    .child(div().flex_1().min_w_0().truncate().child(name))
+                    .child(div().text_size(px(12.)).text_color(FAINT).child(size)),
+            );
+        }
+        let folder = dir.map(|d| self.short(&d)).unwrap_or_default();
+        Some(
+            div()
+                .id("wipe-modal")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(tint(Rgba { r: 0., g: 0., b: 0., a: 1. }, 0.6))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_wipe = false;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("wipe-card")
+                        .w(px(500.))
+                        .max_h(relative(0.85))
+                        .overflow_y_scroll()
+                        .p_6()
+                        .gap_4()
+                        .rounded(px(16.))
+                        .bg(SIDEBAR)
+                        .border_1()
+                        .border_color(BORDER)
+                        .shadow_2xl()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .size(px(44.))
+                                .rounded(px(12.))
+                                .bg(tint(RED, 0.16))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon(IconName::Trash, 22., RED)),
+                        )
+                        .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("Remove all of Agent Cleanup's data?"))
+                        .child(div().text_color(MUTED).child(format!(
+                            "These are deleted for good, not moved to the Recycle Bin, along with the {folder} folder. Then the app closes. If you open it again it starts fresh, like the first time."
+                        )))
+                        .child(card().p_3().child(list))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .text_size(px(13.))
+                                .text_color(MUTED)
+                                .child(icon(IconName::ShieldCheck, 15., GREEN))
+                                .child(div().flex_1().min_w_0().child(
+                                    "Your repos and files aren't touched. Anything the app moved to the Recycle Bin stays there until you empty it. To uninstall completely, delete agent-cleanup.exe afterwards.",
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .pt_2()
+                                .child(button("wipe-cancel", "Cancel", ButtonKind::Ghost).on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.confirm_wipe = false;
+                                        cx.notify();
+                                    },
+                                )))
+                                .child(
+                                    icon_button("wipe-go", IconName::Trash, "Remove and close", ButtonKind::Danger)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.remove_all_data();
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
                 ),
         )
     }
