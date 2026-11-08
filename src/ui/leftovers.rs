@@ -424,7 +424,7 @@ impl AgentCleanup {
                     )
                     .child(
                         icon_button("recycle-sel", IconName::Trash, "Recycle selected", ButtonKind::Danger)
-                            .tip("Move the ticked repos to the Recycle Bin. You'll see exactly what's in them first.")
+                            .tip("Move the ticked items to the Recycle Bin. You'll see exactly what's in them first.")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.ask_recycle(checked.clone());
                                 cx.notify();
@@ -463,7 +463,7 @@ impl AgentCleanup {
                             )
                             .child(
                                 div().text_color(MUTED).text_size(px(13.)).child(
-                                    "Everything in them is already pushed and they haven't been touched in a while. They go to the Recycle Bin, so you can undo.",
+                                    "Everything in them is already saved online and they haven't been used in a while. They go to the Recycle Bin, so you can undo.",
                                 ),
                             ),
                     )
@@ -471,7 +471,7 @@ impl AgentCleanup {
                         icon_button("clean-all", IconName::BroomSparkles, "Clean up", ButtonKind::Primary)
                             .h(px(40.))
                             .px_5()
-                            .tip("Review the safe repos and move them to the Recycle Bin")
+                            .tip("Review the safe ones and move them to the Recycle Bin")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.ask_recycle(safe.clone());
                                 cx.notify();
@@ -484,13 +484,13 @@ impl AgentCleanup {
         if rows.is_empty() {
             let (title, sub) = if self.scan.is_some() {
                 (
-                    "Looking for repos...",
+                    "Looking for project copies...",
                     "Results appear here as they're found.",
                 )
             } else if self.lib.is_empty() {
                 (
                     "Nothing found yet",
-                    "Run a scan to look for leftover repos.",
+                    "Run a scan to look for copies of projects that AI tools left behind.",
                 )
             } else if !self.search_text.is_empty() {
                 ("No matches", "Try a different search.")
@@ -587,7 +587,7 @@ impl AgentCleanup {
                     .child(tip_row(
                         IconName::CircleQuestionMark,
                         RED,
-                        "Git couldn't read these, so the app can't tell whether they hold unsaved work. They're never marked safe on their own.",
+                        "The app couldn't look inside these, so it can't tell whether they hold unsaved work. They're never marked safe on their own.",
                     ))
                     .child(tip_row(
                         IconName::CircleCheck,
@@ -798,7 +798,7 @@ impl AgentCleanup {
                         icon_action(
                             SharedString::from(format!("term-{}", path.display())),
                             IconName::SquareTerminal,
-                            "Open a terminal here",
+                            "Open a command window here (for git users)",
                             false,
                         )
                         .on_click(cx.listener(move |_, _, _, cx| {

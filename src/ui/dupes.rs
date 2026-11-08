@@ -32,7 +32,7 @@ impl AgentCleanup {
             },
             ButtonKind::Secondary,
         )
-        .tip("Duplicates come from the repo scan. Scan again to pick up new clones.")
+        .tip("Duplicates come from the Leftovers scan. Scan again to pick up new copies.")
         .on_click(cx.listener(|this, _, _, cx| {
             if this.scan.is_none() {
                 this.start_scan();
@@ -46,7 +46,7 @@ impl AgentCleanup {
                 format!("Clean up {}", human_size(safe_bytes)),
                 ButtonKind::Primary,
             )
-            .tip("Recycle the extra copies that are outside your projects and fully pushed. You'll see the list first.")
+            .tip("Recycle the extra copies that are outside your projects and fully saved online. You'll see the list first.")
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.ask_recycle_dupes(safe.clone());
                 cx.notify();
@@ -57,7 +57,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Duplicates",
-                "The same repo cloned into more than one folder. Keep one copy and recycle the rest.",
+                "The same project downloaded (cloned) into more than one folder. Keep one copy and recycle the rest.",
             )))
             .child(rescan)
             .children(clean);
@@ -78,7 +78,7 @@ impl AgentCleanup {
                 .child(meta(
                     IconName::Copy,
                     format!(
-                        "{} repo{} cloned more than once",
+                        "{} project{} downloaded more than once",
                         groups.len(),
                         if groups.len() == 1 { "" } else { "s" }
                     ),
@@ -98,7 +98,7 @@ impl AgentCleanup {
                 .child(empty_state(
                     IconName::FolderSearch,
                     if scanning { "Scanning..." } else { "No scan yet" },
-                    "Duplicates are found among the repos the scan finds. Set up your project folders and scan from the Leftovers page.".into(),
+                    "Duplicates are found among the project copies the Leftovers scan finds. Set up your project folders and scan from the Leftovers page.".into(),
                 ))
                 .child(
                     h_flex().justify_center().pb_8().child(
@@ -115,7 +115,7 @@ impl AgentCleanup {
                 .child(empty_state(
                     IconName::ShieldCheck,
                     "No duplicates",
-                    "Every repo the scan found is cloned only once.".into(),
+                    "Every project the scan found is on this PC only once.".into(),
                 ))
                 .into_any_element()
         } else {
@@ -208,7 +208,7 @@ impl AgentCleanup {
             (
                 "Extra copy",
                 BLUE,
-                "Everything is pushed, so the kept copy has it all.".into(),
+                "Everything in it is saved online, so the copy you keep has it all.".into(),
             )
         };
         let pill = h_flex()

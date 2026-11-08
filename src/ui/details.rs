@@ -85,7 +85,7 @@ impl AgentCleanup {
                         ButtonKind::Secondary,
                     )
                     .flex_1()
-                    .tip("Open a terminal in this folder to run git commands")
+                    .tip("Open a command window in this folder, for running git commands")
                     .on_click(
                         cx.listener(move |_, _, _, _| agent_cleanup::actions::open_terminal(&p2)),
                     ),
@@ -105,7 +105,7 @@ impl AgentCleanup {
                             ButtonKind::Ghost,
                         )
                         .flex_1()
-                        .tip("Treat this folder as real work. Repos in it won't be flagged again.")
+                        .tip("Treat this folder as your real work. The app won't flag it again.")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.add_project(p.clone());
                             cx.notify();
@@ -114,7 +114,7 @@ impl AgentCleanup {
                     .child(
                         icon_button("d-hide", IconName::EyeOff, "Hide", ButtonKind::Ghost)
                             .flex_1()
-                            .tip("Stop showing this repo. Unhide it on the Projects page.")
+                            .tip("Stop showing it here. It isn't touched, and you can unhide it on the Projects page.")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.hide(p2.clone());
                                 cx.notify();
@@ -283,12 +283,12 @@ impl AgentCleanup {
                             .child(fact(
                                 "Branch",
                                 git.and_then(|g| g.branch.clone())
-                                    .unwrap_or_else(|| "None (detached)".into()),
+                                    .unwrap_or_else(|| "None".into()),
                             ))
                             .child(fact(
-                                "Remote",
+                                "Online copy",
                                 git.and_then(|g| g.remote_url.clone())
-                                    .unwrap_or_else(|| "None".into()),
+                                    .unwrap_or_else(|| "None, only on this PC".into()),
                             ))
                             .when_some(r.project_root.clone(), |d, root: std::path::PathBuf| {
                                 d.child(fact("Project", self.short(&root)))
