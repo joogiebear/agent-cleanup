@@ -108,13 +108,13 @@ impl AgentCleanup {
                                 .child("Find what your AI coding tools left behind"),
                         )
                         .child(div().text_color(MUTED).text_size(px(15.)).child(
-                            "Agents like Claude Code and Codex often clone repos or start scratch projects outside your real folders. Agent Cleanup finds them, checks what's unsaved, and moves the safe ones to the Recycle Bin for you.",
+                            "AI coding tools like Claude Code and Codex often download copies of projects or make scratch files outside your real folders. Agent Cleanup finds them, checks whether anything in them is unsaved, and moves the safe ones to the Recycle Bin for you.",
                         )),
                 )
                 .child(
                     card().p_6().flex().flex_col().gap_5()
-                        .child(step("1", "Add your project folders", "So the app knows which repos are your real work."))
-                        .child(step("2", "Scan", "It finds every git repo outside those folders and checks what's unsaved."))
+                        .child(step("1", "Add your project folders", "The folders where your real work lives, so the app leaves them alone."))
+                        .child(step("2", "Scan", "It finds copies of projects (git repos) everywhere else and checks whether any work in them isn't saved anywhere else."))
                         .child(step("3", "Clean up", "Recycle the ones marked safe. You can always undo.")),
                 )
                 .child(
@@ -129,7 +129,7 @@ impl AgentCleanup {
                         .child(
                             button("w-skip", "Skip and scan everything", ButtonKind::Ghost)
                                 .h(px(42.))
-                                .tip("Every repo will show as a leftover until you add project folders.")
+                                .tip("Everything found will show as a leftover until you add project folders.")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.skipped_setup = true;
                                     this.start_scan();
@@ -146,7 +146,7 @@ impl AgentCleanup {
         let mut folders = v_flex();
         if self.cfg.project_roots.is_empty() {
             folders = folders.child(div().px_5().py_6().text_color(MUTED).child(
-                "No project folders yet. Every repo found counts as a leftover until you add one.",
+                "No project folders yet. Everything found counts as a leftover until you add one.",
             ));
         }
         for (i, root) in self.cfg.project_roots.iter().enumerate() {
@@ -303,7 +303,7 @@ impl AgentCleanup {
                         .gap_4()
                         .child(div().flex_1().min_w_0().child(page_header(
                             "Project folders",
-                            "Where your real work lives, like C:\\Users\\you\\code. Repos inside these are left alone. Repos anywhere else are possible leftovers.",
+                            "Where your real work lives, like C:\\Users\\you\\code. Anything inside these is left alone. Project copies found anywhere else are possible leftovers.",
                         )))
                         .child(
                             icon_button("add-root", IconName::FolderPlus, "Add folder", ButtonKind::Primary)
@@ -341,7 +341,7 @@ impl AgentCleanup {
                                 .gap_4()
                                 .child(div().flex_1().min_w_0().child(page_header(
                                     "Where to look",
-                                    "Folders scanned for git repos. Your home folder covers Downloads, Desktop, Documents and the Temp folder where tools often clone things.",
+                                    "Folders the app searches for project copies (git repos). Your home folder covers Downloads, Desktop, Documents and the Temp folder, where AI tools often put things.",
                                 )))
                                 .child(
                                     icon_button("add-scan", IconName::FolderPlus, "Add", ButtonKind::Secondary)
@@ -354,8 +354,8 @@ impl AgentCleanup {
                     v_flex()
                         .gap_3()
                         .child(page_header(
-                            "Hidden repos",
-                            "Repos you chose to stop seeing. They're never touched.",
+                            "Hidden items",
+                            "Things you chose to stop seeing. The app never touches them.",
                         ))
                         .child(card().child(if self.cfg.ignored.is_empty() {
                             v_flex().child(div().px_5().py_6().text_color(MUTED).child("Nothing hidden."))
@@ -786,15 +786,39 @@ impl AgentCleanup {
                         .child(v.explanation()),
                 )
         };
+        let term = |word: &'static str, meaning: &'static str| {
+            h_flex()
+                .gap_3()
+                .items_start()
+                .child(
+                    div()
+                        .w(px(150.))
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(word),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .text_color(MUTED)
+                        .child(meaning),
+                )
+        };
+        let mut words = v_flex().gap_3();
+        for (w, m) in GLOSSARY {
+            words = words.child(term(w, m));
+        }
         page_body("help").child(
             column()
                 .child(page_header(
                     "How this works",
-                    "AI coding tools often clone repos or start scratch projects outside the folder you're working in. This app finds them and helps you clean them up safely.",
+                    "AI coding tools like Claude Code and Codex often download copies of projects or make scratch files outside the folder you're working in. This app finds them and helps you clean them up safely. You don't need to be a developer to use it.",
                 ))
-                .child(block(IconName::FolderHeart, ACCENT, "1. Tell it where your projects are", "Add your project folders on the Projects page. Repos inside them are yours and won't be flagged."))
-                .child(block(IconName::Scan, BLUE, "2. It scans for repos", "It looks for any folder with a .git inside under your home folder, skipping dependency caches like node_modules. Results are saved, so it opens instantly next time."))
-                .child(block(IconName::GitBranch, ORANGE, "3. It checks what's unsaved", "Using git (read-only), it checks each repo for uncommitted changes, commits that aren't on a remote, stashes, and whether it has a remote at all."))
+                .child(block(IconName::FolderHeart, ACCENT, "1. Tell it where your projects are", "Add the folders that hold your real work on the Projects page. Anything inside them is yours and won't be flagged."))
+                .child(block(IconName::Scan, BLUE, "2. It looks for project copies", "It searches your home folder for git repos: project folders whose history is tracked by git. That's what AI tools create when they download or start a project. Results are saved, so it opens instantly next time."))
+                .child(block(IconName::GitBranch, ORANGE, "3. It checks what's unsaved", "For each one it checks, without changing anything, whether it holds work that isn't saved anywhere else: edits that were never saved into its history, saved versions that were never uploaded, or a project that isn't online at all."))
                 .child(
                     card()
                         .p_5()
@@ -807,6 +831,21 @@ impl AgentCleanup {
                         .child(status(Verdict::Unreadable))
                         .child(status(Verdict::StrayActive))
                         .child(status(Verdict::InProject)),
+                )
+                .child(
+                    card()
+                        .p_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Words you'll see"))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(FAINT)
+                                .child("You don't need to know any of this to use the app, but it helps to know what the labels mean."),
+                        )
+                        .child(words),
                 )
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
                 .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
@@ -1026,7 +1065,7 @@ impl AgentCleanup {
                         Some("inside one of your project folders".to_string())
                     } else {
                         match &r.git {
-                            None => Some("git couldn't read it".to_string()),
+                            None => Some("the app couldn't look inside it".to_string()),
                             Some(g) if g.has_local_work() => {
                                 Some(g.local_work_reasons().join(", "))
                             }
@@ -1108,8 +1147,8 @@ impl AgentCleanup {
                         } else {
                             match &r.git {
                                 None => match &r.error {
-                                    Some(e) => format!("git couldn't read it: {e}"),
-                                    None => "git couldn't read it".to_string(),
+                                    Some(e) => format!("the app couldn't look inside it: {e}"),
+                                    None => "the app couldn't look inside it".to_string(),
                                 },
                                 Some(g) if g.has_local_work() => g.local_work_reasons().join(", "),
                                 // Everything is pushed; it was just used recently.
@@ -1155,7 +1194,7 @@ impl AgentCleanup {
             )
         } else if c.what == ConfirmFor::Duplicates {
             (
-                "Another copy of each is kept, and everything in these is pushed.",
+                "Another copy of each is kept, and everything in these is saved online.",
                 "These have something the kept copy may not:",
                 "I've checked these and they can go",
             )
@@ -1173,13 +1212,13 @@ impl AgentCleanup {
             )
         } else if c.what == ConfirmFor::Trail {
             (
-                "An agent made all of these outside its project, and none hold unsaved git work.",
+                "An AI agent made all of these outside its project, and none hold unsaved work.",
                 "Take a look at these first:",
                 "I've checked these and they can go",
             )
         } else {
             (
-                "Everything is committed and pushed, so you can clone it again any time.",
+                "Everything is saved online, so it can be downloaded again any time.",
                 "Some work here isn't saved anywhere else:",
                 "I understand this work only exists on this PC",
             )
@@ -1371,3 +1410,47 @@ impl AgentCleanup {
         )
     }
 }
+
+/// Plain-language meanings for the words the app can't avoid.
+const GLOSSARY: [(&str, &str); 10] = [
+    (
+        "Repo",
+        "Short for repository: a project folder whose history is tracked by git. Most of what this app finds are repos.",
+    ),
+    (
+        "Git",
+        "The tool developers and AI agents use to save versions of a project. This app only reads it and never changes anything with it.",
+    ),
+    (
+        "Commit",
+        "A saved version in a repo's history. Edits that aren't committed aren't saved in the history yet.",
+    ),
+    (
+        "Push, online copy",
+        "Pushing uploads saved versions to an online copy of the repo, usually on GitHub. Work that's pushed is safe even if this folder is removed.",
+    ),
+    (
+        "Clone",
+        "A copy of a project downloaded from GitHub or a similar site. AI agents often clone projects to try them out, then leave them behind.",
+    ),
+    (
+        "Stash",
+        "Changes set aside for later inside a repo. They live only in that folder.",
+    ),
+    (
+        "Agent, session",
+        "An agent is an AI coding tool like Claude Code or Codex. Each conversation with one is a session, and its history is kept on your PC.",
+    ),
+    (
+        "Build folders",
+        "Libraries a project downloads and files it builds, like node_modules. They take a lot of space and one command recreates them.",
+    ),
+    (
+        "Temp folder",
+        "A Windows folder for short-lived files (AppData\\Local\\Temp). Anything an agent put there was meant to be thrown away.",
+    ),
+    (
+        "Recycle Bin",
+        "Everything this app removes goes there first. Use Undo, or restore it from the Recycle Bin, if you change your mind.",
+    ),
+];
