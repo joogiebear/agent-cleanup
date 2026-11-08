@@ -431,6 +431,8 @@ impl AgentCleanup {
                             })),
                     ),
             );
+        } else if self.filter == Filter::Unreadable && stats.unreadable > 0 {
+            body = body.child(self.unreadable_guide(now, cx));
         } else if stats.safe > 0 && self.scan.is_none() {
             let safe = self.lib.safe_paths(&self.cfg, now);
             body = body.child(
@@ -537,6 +539,90 @@ impl AgentCleanup {
         body
     }
 
+    /// How to decide about repos git couldn't read, plus a shortcut to tick
+    /// the ones in temp folders.
+    fn unreadable_guide(
+        &self,
+        now: SystemTime,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let temp = self.lib.unreadable_temp_paths(&self.cfg, now);
+        let n = temp.len();
+        let tip_row = |ic: IconName, color: Rgba, text: &'static str| {
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap_2()
+                .child(div().pt(px(2.)).child(icon(ic, 14., color)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(MUTED)
+                        .text_size(px(13.))
+                        .child(text),
+                )
+        };
+        h_flex()
+            .items_start()
+            .gap_4()
+            .px_5()
+            .py_4()
+            .rounded(px(12.))
+            .bg(tint(BLUE, 0.10))
+            .border_1()
+            .border_color(tint(BLUE, 0.35))
+            .child(icon(IconName::Info, 22., BLUE))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("How to tell if these are safe to remove"),
+                    )
+                    .child(tip_row(
+                        IconName::CircleQuestionMark,
+                        RED,
+                        "Git couldn't read these, so the app can't tell whether they hold unsaved work. They're never marked safe on their own.",
+                    ))
+                    .child(tip_row(
+                        IconName::CircleCheck,
+                        GREEN,
+                        "In a temp folder (tagged \"Temp folder\"): almost always a throwaway copy an agent made. Usually fine to remove.",
+                    ))
+                    .child(tip_row(
+                        IconName::FolderOpen,
+                        ORANGE,
+                        "Anywhere else: hover the card and open the folder. If you see files you wrote or changed, keep it or copy them out first.",
+                    ))
+                    .child(tip_row(
+                        IconName::ArchiveRestore,
+                        MUTED,
+                        "Removing moves them to the Recycle Bin, so you can restore anything you change your mind about.",
+                    )),
+            )
+            .when(n > 0, |d| {
+                d.child(
+                    icon_button(
+                        "select-temp",
+                        IconName::ListChecks,
+                        format!("Select {n} in temp folders"),
+                        ButtonKind::Primary,
+                    )
+                    .flex_none()
+                    .tip("Tick the ones in temp folders. Nothing is removed until you press Recycle selected and confirm.")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.lib.checked.extend(temp.iter().cloned());
+                        cx.notify();
+                    })),
+                )
+            })
+    }
+
     fn repo_row(
         &self,
         path: PathBuf,
@@ -557,6 +643,7 @@ impl AgentCleanup {
         let p_bin = path.clone();
         let p_focus = path.clone();
         let removable = v != Verdict::InProject && v != Verdict::Checking;
+        let temp_hint = v == Verdict::Unreadable && r.in_temp_folder();
 
         let checkbox = div()
             .id(SharedString::from(format!("chk-{}", path.display())))
@@ -623,6 +710,20 @@ impl AgentCleanup {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(r.name()),
                             )
+                            .when(temp_hint, |d| {
+                                d.child(
+                                    div()
+                                        .id(SharedString::from(format!("tmp-{}", path.display())))
+                                        .flex_none()
+                                        .px_1p5()
+                                        .rounded(px(5.))
+                                        .bg(tint(GREEN, 0.14))
+                                        .text_color(GREEN)
+                                        .text_size(px(11.))
+                                        .child("Temp folder")
+                                        .tip("It's in a temp folder, where agents put throwaway copies. Almost always fine to remove."),
+                                )
+                            })
                             .when(!summary.is_empty(), |d| {
                                 d.child(
                                     div()
