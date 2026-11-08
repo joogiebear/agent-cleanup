@@ -53,19 +53,6 @@ impl AgentCleanup {
             this.load_agentdata();
             cx.notify();
         }));
-        let clean = (!safe.is_empty() && !loading).then(|| {
-            icon_button(
-                "ad-clean",
-                IconName::Broom,
-                format!("Clean up {}", human_size(safe_bytes)),
-                ButtonKind::Primary,
-            )
-            .tip("Recycle everything not used in the last week. You'll see the list first.")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.ask_recycle_agentdata(safe.clone());
-                cx.notify();
-            }))
-        });
         let header = h_flex()
             .items_end()
             .gap_3()
@@ -73,31 +60,93 @@ impl AgentCleanup {
                 "Agent data",
                 "Chat history that Claude Code and Codex kept for projects you've since deleted. Without the project those chats can't be picked up again, so they just take space.",
             )))
-            .child(refresh)
-            .children(clean);
+            .child(refresh);
 
         let summary = (a.loaded && !a.items.is_empty()).then(|| {
             let total: u64 = a.items.iter().map(|o| o.size_bytes).sum();
             let sessions: usize = a.items.iter().map(|o| o.sessions).sum();
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_1()
-                .text_size(px(13.))
-                .text_color(MUTED)
-                .child(meta(
-                    IconName::FolderX,
-                    format!(
-                        "{} deleted project{}, {}",
-                        a.items.len(),
-                        if a.items.len() == 1 { "" } else { "s" },
-                        human_size(total)
-                    ),
+            let n_safe = safe.len();
+            let n_recent = a.items.len() - n_safe;
+            let headline = if n_safe > 0 {
+                format!(
+                    "{n_safe} of {} can go, freeing {}",
+                    a.items.len(),
+                    human_size(safe_bytes)
+                )
+            } else {
+                "Everything here was used recently".to_string()
+            };
+            let text = if n_safe > 0 {
+                "The projects these chats belonged to are gone, so the chats can't be reopened. Removing them only frees space: no project or file of yours is touched, and they go to the Recycle Bin first."
+            } else {
+                "Their projects are gone, but they were used in the last week. If you moved or renamed a project rather than deleting it, you may still want its chats."
+            };
+            let mut tags = h_flex().flex_wrap().gap_2();
+            if n_safe > 0 {
+                tags = tags.child(verdict_tag(
+                    "ad-sum-safe",
+                    GREEN,
+                    IconName::CircleCheck,
+                    format!("{n_safe} safe to clean"),
+                    "Not used in the last week, and the project is gone.",
+                ));
+            }
+            if n_recent > 0 {
+                tags = tags.child(verdict_tag(
+                    "ad-sum-recent",
+                    ORANGE,
+                    IconName::TriangleAlert,
+                    format!("{n_recent} check first"),
+                    "Used in the last week. The project may only have moved.",
+                ));
+            }
+            let action = (n_safe > 0 && !loading).then(|| {
+                let safe = safe.clone();
+                icon_button(
+                    "ad-clean",
+                    IconName::BroomSparkles,
+                    format!("Clean up {}", human_size(safe_bytes)),
+                    ButtonKind::Primary,
+                )
+                .tip("Recycle the chat history marked Safe to clean. You'll see the list first.")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.ask_recycle_agentdata(safe.clone());
+                    cx.notify();
+                }))
+            });
+            v_flex()
+                .gap_2()
+                .child(advice_banner(
+                    if n_safe > 0 { GREEN } else { ORANGE },
+                    if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
+                    headline,
+                    text,
+                    Some(tags),
+                    action,
                 ))
-                .child(meta(
-                    IconName::Logs,
-                    format!("{sessions} session{}", if sessions == 1 { "" } else { "s" }),
-                ))
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_x_4()
+                        .text_size(px(12.))
+                        .text_color(FAINT)
+                        .child(meta(
+                            IconName::FolderX,
+                            format!(
+                                "{} deleted project{}, {} in total",
+                                a.items.len(),
+                                if a.items.len() == 1 { "" } else { "s" },
+                                human_size(total)
+                            ),
+                        ))
+                        .child(meta(
+                            IconName::Logs,
+                            format!(
+                                "{sessions} chat session{}",
+                                if sessions == 1 { "" } else { "s" }
+                            ),
+                        )),
+                )
         });
 
         let body: AnyElement = if !a.loaded {
@@ -151,24 +200,28 @@ impl AgentCleanup {
         );
         let warning = recent_warning(o, now);
         let color = if warning.is_some() { ORANGE } else { MUTED };
-        let pill = warning.map(|w| {
-            h_flex()
-                .id(SharedString::from(format!("ad-care-{key}")))
-                .flex_none()
-                .gap_1()
-                .px_2()
-                .py(px(2.))
-                .rounded_full()
-                .bg(tint(ORANGE, 0.14))
-                .text_color(ORANGE)
-                .text_size(px(11.))
-                .font_weight(FontWeight::MEDIUM)
-                .child(icon(IconName::TriangleAlert, 12., ORANGE))
-                .child("Used recently")
-                .tip(format!(
-                    "{w}. If you moved the project rather than deleting it, you may still want these."
-                ))
-        });
+        let explain = match &warning {
+            Some(w) => format!(
+                "Its project folder is gone, but it was {w}. If you moved or renamed the project rather than deleting it, keep these chats."
+            ),
+            None => "Its project folder is gone, so these chats can't be reopened. Removing them only frees space; none of your files are touched.".to_string(),
+        };
+        let pill = match warning {
+            Some(_) => verdict_tag(
+                SharedString::from(format!("ad-care-{key}")),
+                ORANGE,
+                IconName::TriangleAlert,
+                "Check first",
+                "Used in the last week. The project may only have moved.",
+            ),
+            None => verdict_tag(
+                SharedString::from(format!("ad-care-{key}")),
+                GREEN,
+                IconName::CircleCheck,
+                "Safe to clean",
+                "Not used in the last week, and the project is gone.",
+            ),
+        };
         let mut facts = h_flex()
             .flex_wrap()
             .gap_x_3()
@@ -223,8 +276,9 @@ impl AgentCleanup {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(o.project_name()),
                             )
-                            .children(pill),
+                            .child(pill),
                     )
+                    .child(div().text_size(px(12.)).text_color(MUTED).child(explain))
                     .child(
                         div()
                             .truncate()
