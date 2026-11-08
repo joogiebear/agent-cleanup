@@ -285,7 +285,7 @@ impl Library {
     pub fn unreadable_temp_paths(&self, cfg: &Config, now: SystemTime) -> Vec<PathBuf> {
         self.repos
             .iter()
-            .filter(|r| r.verdict(cfg, now) == Verdict::Unreadable && r.in_temp_folder())
+            .filter(|r| r.verdict(cfg, now) == Verdict::Unreadable && r.is_throwaway_temp_copy())
             .map(|r| r.path.clone())
             .collect()
     }

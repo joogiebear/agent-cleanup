@@ -178,6 +178,8 @@ mod tests {
             error: None,
             size_bytes: Some(100),
             last_activity: Some(UNIX_EPOCH + Duration::from_secs(100_000_000 - days_ago * 86_400)),
+            private_files: Vec::new(),
+            private_files_total: 0,
         }
     }
 

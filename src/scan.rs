@@ -72,7 +72,11 @@ pub fn inspect_repo(path: &Path, cfg: &Config, cancel: &AtomicBool) -> Repo {
     let mut repo = Repo::new(path.to_path_buf(), cfg);
     match git::inspect(path) {
         Ok(g) => repo.git = Some(g),
-        Err(e) => repo.error = Some(e.to_string()),
+        Err(e) => {
+            repo.error = Some(e.to_string());
+            // git can't say what's ignored, so look for private files by name.
+            (repo.private_files, repo.private_files_total) = crate::private::find(path);
+        }
     }
     repo.size_bytes = Some(dir_size(path, cancel));
     repo.last_activity = last_activity(path, repo.git.as_ref().and_then(|g| g.last_commit));

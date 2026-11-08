@@ -18,6 +18,12 @@ pub struct Repo {
     pub size_bytes: Option<u64>,
     /// Newest of: last commit, last checkout/fetch/stage.
     pub last_activity: Option<SystemTime>,
+    /// When git can't read the repo: private-looking files found on disk
+    /// (`.env`, databases, keys). See [`crate::private`].
+    #[serde(default)]
+    pub private_files: Vec<String>,
+    #[serde(default)]
+    pub private_files_total: usize,
 }
 
 /// What the app thinks you should do about a repo.
@@ -78,6 +84,8 @@ impl Repo {
             error: None,
             size_bytes: None,
             last_activity: None,
+            private_files: Vec::new(),
+            private_files_total: 0,
         }
     }
 
@@ -101,6 +109,22 @@ impl Repo {
     /// throwaway clones. A hint, not a guarantee.
     pub fn in_temp_folder(&self) -> bool {
         is_temp_path(&self.path, Some(&std::env::temp_dir()))
+    }
+
+    /// A temp-folder copy git can't read and with nothing private-looking in
+    /// it: the kind that's fine to clear out in one go.
+    pub fn is_throwaway_temp_copy(&self) -> bool {
+        self.git.is_none() && self.in_temp_folder() && self.private_files_total == 0
+    }
+
+    /// "it holds private files ... (.env, app.db)" when git couldn't list them.
+    pub fn private_files_note(&self) -> Option<String> {
+        (self.git.is_none() && self.private_files_total > 0).then(|| {
+            format!(
+                "it holds private files that may be the only copy ({})",
+                crate::private::preview(&self.private_files, self.private_files_total, 3)
+            )
+        })
     }
 
     pub fn is_stale(&self, stale_after_days: u32, now: SystemTime) -> bool {
@@ -144,7 +168,12 @@ impl Repo {
                 Some(e) => format!("The app couldn't look inside it. Git (the tool that tracks its history) said: {e}"),
                 None => "The app couldn't look inside it.".to_string(),
             });
-            if self.in_temp_folder() {
+            if self.private_files_total > 0 {
+                steps.push(format!(
+                    "It holds files that look private: {}. Files like these hold passwords and settings (.env), keys or a database, and this may be the only copy. Open the folder and copy out anything you need before you recycle it.",
+                    crate::private::preview(&self.private_files, self.private_files_total, 8)
+                ));
+            } else if self.in_temp_folder() {
                 steps.push(
                     "It's in a temp folder, which is where agents put throwaway copies. It's almost always fine to recycle."
                         .to_string(),
@@ -425,6 +454,23 @@ mod tests {
         real.inspected = true;
         let steps = real.next_steps(&cfg, now);
         assert!(steps.iter().any(|s| s.contains("Open the folder")));
+    }
+
+    #[test]
+    fn private_files_keep_temp_copies_out_of_select_all() {
+        let cfg = Config::default();
+        let now = SystemTime::now();
+        let mut tmp = Repo::new(PathBuf::from("/x/Temp/clone"), &cfg);
+        tmp.inspected = true;
+        tmp.error = Some("not a git repository".into());
+        assert!(tmp.is_throwaway_temp_copy());
+        tmp.private_files = vec![".env".into()];
+        tmp.private_files_total = 1;
+        assert!(!tmp.is_throwaway_temp_copy());
+        let steps = tmp.next_steps(&cfg, now);
+        assert!(steps.iter().any(|s| s.contains(".env")), "{steps:?}");
+        assert!(!steps.iter().any(|s| s.contains("almost always fine")));
+        assert!(tmp.private_files_note().unwrap().contains(".env"));
     }
 
     #[test]
