@@ -1192,7 +1192,7 @@ impl AgentCleanup {
         }
         self.notify_text(
             format!(
-                "{} is now a project folder. Repos in it won't be flagged.",
+                "{} is now a project folder. Nothing in it will be flagged.",
                 self.short(&p)
             ),
             false,
@@ -1489,49 +1489,49 @@ impl AgentCleanup {
             .child(item(
                 "nav-leftovers",
                 IconName::FolderSearch,
-                "Leftovers: repos found outside your projects",
+                "Leftovers: copies of projects found outside your project folders",
                 Page::Leftovers,
             ))
             .child(item(
                 "nav-trail",
                 IconName::Footprints,
-                "Agent trail: files and clones agents left outside their projects",
+                "Agent trail: files and downloads AI agents left outside their projects",
                 Page::Trail,
             ))
             .child(item(
                 "nav-downloads",
                 IconName::Download,
-                "Downloads: what's in your Downloads folder, matched to projects",
+                "Downloads: your Downloads folder, matched to the project each file was for",
                 Page::Downloads,
             ))
             .child(item(
                 "nav-agentdata",
                 IconName::Ghost,
-                "Agent data: session history left from projects you deleted",
+                "Agent data: old AI chat history from projects you deleted",
                 Page::AgentData,
             ))
             .child(item(
                 "nav-dupes",
                 IconName::Copy,
-                "Duplicates: the same repo cloned more than once",
+                "Duplicates: the same project downloaded more than once",
                 Page::Duplicates,
             ))
             .child(item(
                 "nav-junk",
                 IconName::Package,
-                "Build junk: dependency and build folders one command can recreate",
+                "Build junk: big library and build folders your projects can recreate",
                 Page::Junk,
             ))
             .child(item(
                 "nav-updates",
                 IconName::CircleArrowUp,
-                "Updates: outdated packages in your projects",
+                "Updates: newer versions of the libraries your projects use",
                 Page::Updates,
             ))
             .child(item(
                 "nav-projects",
                 IconName::FolderHeart,
-                "Projects: the folders that hold your real work",
+                "Projects: tell the app where your real work lives",
                 Page::Projects,
             ))
             .child(item(
@@ -1544,7 +1544,7 @@ impl AgentCleanup {
             .child(item(
                 "nav-help",
                 IconName::CircleQuestionMark,
-                "How this works",
+                "How this works, and what the words mean",
                 Page::Help,
             ))
             .child(

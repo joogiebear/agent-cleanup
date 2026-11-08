@@ -14,8 +14,8 @@ It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI fr
 4. **It gives each repo a status:**
    - **Safe to remove:** outside your projects, unused for a while (14 days by default), and everything is pushed.
    - **Has unsaved work:** outside your projects, but something in it exists only on this PC.
-   - **Couldn't check:** git couldn't read it, often a half-copied repo or a worktree whose main repo is gone. The reason is shown, and it's treated like unsaved work.
-   - **Stray, recent:** outside your projects but used recently.
+   - **Couldn't check:** git couldn't read it, often a half-copied repo or a worktree whose main repo is gone. The reason is shown, and it's treated like unsaved work. Ones in a temp folder are tagged **Temp folder**: those are almost always throwaway agent copies, and the page can select them all for you.
+   - **Used recently:** outside your projects but used in the last few days.
    - **In a project:** inside one of your project folders.
 
 The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **Agent data**, **Duplicates**, **Build junk**, **Updates**, **Projects**, **Activity** (everything the app moved or put back), **How this works** and **Settings**. On Leftovers, the sidebar filters by status and the cards at the top show how much space you can free. Click any repo to see what's unsaved and what to do about it, for example "Run `git push` to upload the 2 commits". Buttons there open the folder or a terminal in it.

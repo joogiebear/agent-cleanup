@@ -75,7 +75,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Downloads",
-                "What's in your Downloads folder, matched to the project you were working on when it arrived.",
+                "Files in your Downloads folder, each with a guess at which project it was for, so you can move it there or recycle it.",
             )))
             .children(open)
             .child(refresh);
@@ -114,7 +114,7 @@ impl AgentCleanup {
                     IconName::Hourglass,
                     "Looking at your downloads...",
                     format!(
-                        "Listing {dir_label} and comparing each arrival time with your git history and agent sessions. Nothing is changed."
+                        "Listing {dir_label} and comparing when each file arrived with what you and your AI agents were working on. Nothing is changed."
                     ),
                 ))
                 .into_any_element()

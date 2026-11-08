@@ -44,21 +44,25 @@ impl GitState {
         };
         if self.changed_files > 0 {
             out.push(format!(
-                "{} not committed",
-                plural(self.changed_files, "1 changed file", "changed files")
+                "{} not saved (committed)",
+                plural(self.changed_files, "1 edited file", "edited files")
             ));
         }
         if self.unpushed_commits > 0 && self.remote_url.is_some() {
             out.push(format!(
-                "{} not pushed to any remote",
-                plural(self.unpushed_commits, "1 commit", "commits")
+                "{} not uploaded (pushed)",
+                plural(self.unpushed_commits, "1 saved version", "saved versions")
             ));
         }
         if self.stashes > 0 {
-            out.push(plural(self.stashes, "1 stash", "stashes"));
+            out.push(plural(
+                self.stashes,
+                "1 set-aside change (stash)",
+                "set-aside changes (stashes)",
+            ));
         }
         if self.remote_url.is_none() {
-            out.push("no remote, so this repo only exists on this PC".to_string());
+            out.push("not online anywhere, so this folder is the only copy".to_string());
         }
         out
     }
@@ -313,8 +317,8 @@ mod tests {
         assert_eq!(
             g.local_work_reasons(),
             vec![
-                "1 changed file not committed",
-                "3 commits not pushed to any remote"
+                "1 edited file not saved (committed)",
+                "3 saved versions not uploaded (pushed)"
             ]
         );
         assert!(

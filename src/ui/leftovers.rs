@@ -424,13 +424,15 @@ impl AgentCleanup {
                     )
                     .child(
                         icon_button("recycle-sel", IconName::Trash, "Recycle selected", ButtonKind::Danger)
-                            .tip("Move the ticked repos to the Recycle Bin. You'll see exactly what's in them first.")
+                            .tip("Move the ticked items to the Recycle Bin. You'll see exactly what's in them first.")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.ask_recycle(checked.clone());
                                 cx.notify();
                             })),
                     ),
             );
+        } else if self.filter == Filter::Unreadable && stats.unreadable > 0 {
+            body = body.child(self.unreadable_guide(now, cx));
         } else if stats.safe > 0 && self.scan.is_none() {
             let safe = self.lib.safe_paths(&self.cfg, now);
             body = body.child(
@@ -461,7 +463,7 @@ impl AgentCleanup {
                             )
                             .child(
                                 div().text_color(MUTED).text_size(px(13.)).child(
-                                    "Everything in them is already pushed and they haven't been touched in a while. They go to the Recycle Bin, so you can undo.",
+                                    "Everything in them is already saved online and they haven't been used in a while. They go to the Recycle Bin, so you can undo.",
                                 ),
                             ),
                     )
@@ -469,7 +471,7 @@ impl AgentCleanup {
                         icon_button("clean-all", IconName::BroomSparkles, "Clean up", ButtonKind::Primary)
                             .h(px(40.))
                             .px_5()
-                            .tip("Review the safe repos and move them to the Recycle Bin")
+                            .tip("Review the safe ones and move them to the Recycle Bin")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.ask_recycle(safe.clone());
                                 cx.notify();
@@ -482,13 +484,13 @@ impl AgentCleanup {
         if rows.is_empty() {
             let (title, sub) = if self.scan.is_some() {
                 (
-                    "Looking for repos...",
+                    "Looking for project copies...",
                     "Results appear here as they're found.",
                 )
             } else if self.lib.is_empty() {
                 (
                     "Nothing found yet",
-                    "Run a scan to look for leftover repos.",
+                    "Run a scan to look for copies of projects that AI tools left behind.",
                 )
             } else if !self.search_text.is_empty() {
                 ("No matches", "Try a different search.")
@@ -537,6 +539,90 @@ impl AgentCleanup {
         body
     }
 
+    /// How to decide about repos git couldn't read, plus a shortcut to tick
+    /// the ones in temp folders.
+    fn unreadable_guide(
+        &self,
+        now: SystemTime,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let temp = self.lib.unreadable_temp_paths(&self.cfg, now);
+        let n = temp.len();
+        let tip_row = |ic: IconName, color: Rgba, text: &'static str| {
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap_2()
+                .child(div().pt(px(2.)).child(icon(ic, 14., color)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(MUTED)
+                        .text_size(px(13.))
+                        .child(text),
+                )
+        };
+        h_flex()
+            .items_start()
+            .gap_4()
+            .px_5()
+            .py_4()
+            .rounded(px(12.))
+            .bg(tint(BLUE, 0.10))
+            .border_1()
+            .border_color(tint(BLUE, 0.35))
+            .child(icon(IconName::Info, 22., BLUE))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("How to tell if these are safe to remove"),
+                    )
+                    .child(tip_row(
+                        IconName::CircleQuestionMark,
+                        RED,
+                        "The app couldn't look inside these, so it can't tell whether they hold unsaved work. They're never marked safe on their own.",
+                    ))
+                    .child(tip_row(
+                        IconName::CircleCheck,
+                        GREEN,
+                        "In a temp folder (tagged \"Temp folder\"): almost always a throwaway copy an agent made. Usually fine to remove.",
+                    ))
+                    .child(tip_row(
+                        IconName::FolderOpen,
+                        ORANGE,
+                        "Anywhere else: hover the card and open the folder. If you see files you wrote or changed, keep it or copy them out first.",
+                    ))
+                    .child(tip_row(
+                        IconName::ArchiveRestore,
+                        MUTED,
+                        "Removing moves them to the Recycle Bin, so you can restore anything you change your mind about.",
+                    )),
+            )
+            .when(n > 0, |d| {
+                d.child(
+                    icon_button(
+                        "select-temp",
+                        IconName::ListChecks,
+                        format!("Select {n} in temp folders"),
+                        ButtonKind::Primary,
+                    )
+                    .flex_none()
+                    .tip("Tick the ones in temp folders. Nothing is removed until you press Recycle selected and confirm.")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.lib.checked.extend(temp.iter().cloned());
+                        cx.notify();
+                    })),
+                )
+            })
+    }
+
     fn repo_row(
         &self,
         path: PathBuf,
@@ -557,6 +643,7 @@ impl AgentCleanup {
         let p_bin = path.clone();
         let p_focus = path.clone();
         let removable = v != Verdict::InProject && v != Verdict::Checking;
+        let temp_hint = v == Verdict::Unreadable && r.in_temp_folder();
 
         let checkbox = div()
             .id(SharedString::from(format!("chk-{}", path.display())))
@@ -623,6 +710,20 @@ impl AgentCleanup {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(r.name()),
                             )
+                            .when(temp_hint, |d| {
+                                d.child(
+                                    div()
+                                        .id(SharedString::from(format!("tmp-{}", path.display())))
+                                        .flex_none()
+                                        .px_1p5()
+                                        .rounded(px(5.))
+                                        .bg(tint(GREEN, 0.14))
+                                        .text_color(GREEN)
+                                        .text_size(px(11.))
+                                        .child("Temp folder")
+                                        .tip("It's in a temp folder, where agents put throwaway copies. Almost always fine to remove."),
+                                )
+                            })
                             .when(!summary.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -697,7 +798,7 @@ impl AgentCleanup {
                         icon_action(
                             SharedString::from(format!("term-{}", path.display())),
                             IconName::SquareTerminal,
-                            "Open a terminal here",
+                            "Open a command window here (for git users)",
                             false,
                         )
                         .on_click(cx.listener(move |_, _, _, cx| {

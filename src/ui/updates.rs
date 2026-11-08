@@ -57,7 +57,7 @@ fn package_row(p: &Outdated) -> Div {
                 .text_size(px(11.))
                 .text_color(ORANGE)
                 .child(format!("{latest} available"))
-                .tip("A bigger update that may need code changes. The Update button doesn't install it; upgrade it by hand when you're ready."),
+                .tip("A bigger update that might break things until the code is changed to match. The Update button skips it; do it by hand, or ask your agent, when you're ready."),
         );
     }
     row
@@ -87,7 +87,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Updates",
-                "Outdated npm, Cargo and Python packages in your projects. Update opens a terminal that runs the update, so you can watch it.",
+                "Newer versions of the code libraries your projects use (npm, Cargo and Python packages). Mostly useful if you write code. Update opens a window that runs the update, so you can watch it.",
             )))
             .child(check);
 
@@ -97,7 +97,7 @@ impl AgentCleanup {
             .text_color(FAINT)
             .child(icon(IconName::ShieldCheck, 13., FAINT))
             .child(div().flex_1().min_w_0().child(
-                "Only repos in your project folders are checked, since checking runs their tools. Update needs a clean git state, so git diff shows what changed and git checkout undoes it.",
+                "Only projects in your project folders are checked, since checking runs their own tools. Update only starts when the project has no unsaved edits, so whatever the update changes can be seen and undone with git.",
             ));
 
         let body: AnyElement = if self.cfg.project_roots.is_empty() {

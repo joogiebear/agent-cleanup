@@ -144,7 +144,7 @@ impl Item {
         if self.is_repo() {
             match &self.git {
                 // Unknown git state counts as unsaved work.
-                None => out.push("git couldn't read it".to_string()),
+                None => out.push("the app couldn't look inside it".to_string()),
                 Some(g) => out.extend(g.local_work_reasons()),
             }
         }
