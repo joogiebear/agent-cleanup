@@ -690,7 +690,7 @@ impl AgentCleanup {
         let p_bin = path.clone();
         let p_focus = path.clone();
         let removable = v != Verdict::InProject && v != Verdict::Checking;
-        let temp_hint = v == Verdict::Unreadable && r.in_temp_folder();
+        let temp_hint = v == Verdict::Unreadable && r.is_throwaway_temp_copy();
 
         let checkbox = div()
             .id(SharedString::from(format!("chk-{}", path.display())))

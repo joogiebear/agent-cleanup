@@ -13,6 +13,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Scrollable page body with a centered, readable column.
@@ -855,7 +856,7 @@ impl AgentCleanup {
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
                 .child(block(IconName::Bot, ACCENT, "Hand it to your agent", "Most pages have a Copy prompt for your agent button. It copies a ready-to-paste request for Claude Code or Codex that lists those items and says what to do: save unsaved work, explain what something is, or move a file into its project. The prompt tells the agent not to delete anything, so the removing still happens here, through the Recycle Bin. It only contains the paths and notes you can see on the page."))
-                .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. Repos with unsaved work need an extra tick before they can be recycled. Every move is written to the Activity page.")),
+                .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. One-click buttons only ever take things the app is sure about. If you pick a mix, the main button recycles just the safe ones; anything with unsaved work or private-looking files (like a .env with passwords, a key or a database) needs an extra tick. Every move is written to the Activity page.")),
         )
     }
 
@@ -1023,6 +1024,7 @@ impl AgentCleanup {
         let now = SystemTime::now();
         // One row per thing to recycle, whatever page it came from.
         struct Row {
+            path: PathBuf,
             name: String,
             size: Option<u64>,
             icon: IconName,
@@ -1037,6 +1039,7 @@ impl AgentCleanup {
                 .map(|it| {
                     let idle = it.is_idle(days, now);
                     Row {
+                        path: it.path.clone(),
                         name: format!("{} in {}", it.name(), it.repo_name()),
                         size: Some(it.size_bytes),
                         icon: if idle {
@@ -1074,6 +1077,7 @@ impl AgentCleanup {
                         }
                     };
                     Row {
+                        path: r.path.clone(),
                         name: self.short(&r.path),
                         size: r.size_bytes,
                         icon: if risk.is_some() {
@@ -1093,6 +1097,7 @@ impl AgentCleanup {
                 .map(|o| {
                     let risk = super::agentdata::recent_warning(o, now);
                     Row {
+                        path: o.key().to_path_buf(),
                         name: format!("{} ({})", o.project_name(), o.agent.label()),
                         size: Some(o.size_bytes),
                         icon: if risk.is_some() {
@@ -1109,12 +1114,18 @@ impl AgentCleanup {
             c.paths
                 .iter()
                 .filter_map(|p| self.download_item(p))
-                .map(|d| Row {
-                    name: d.name(),
-                    size: Some(d.size_bytes),
-                    icon: download_icon(d),
-                    color: MUTED,
-                    risk: None,
+                .map(|d| {
+                    let private = d.looks_private();
+                    Row {
+                        path: d.path.clone(),
+                        name: d.name(),
+                        size: Some(d.size_bytes),
+                        icon: if private { IconName::TriangleAlert } else { download_icon(d) },
+                        color: if private { ORANGE } else { MUTED },
+                        risk: private.then(|| {
+                            "looks like a private file (passwords, a key or a database) that may be the only copy".to_string()
+                        }),
+                    }
                 })
                 .collect()
         } else if c.what == ConfirmFor::Trail {
@@ -1124,6 +1135,7 @@ impl AgentCleanup {
                 .map(|it| {
                     let w = it.warnings();
                     Row {
+                        path: it.path.clone(),
                         name: it.name(),
                         size: Some(it.size_bytes),
                         icon: if w.is_empty() {
@@ -1147,10 +1159,16 @@ impl AgentCleanup {
                             "inside one of your project folders".to_string()
                         } else {
                             match &r.git {
-                                None => match &r.error {
-                                    Some(e) => format!("the app couldn't look inside it: {e}"),
-                                    None => "the app couldn't look inside it".to_string(),
-                                },
+                                None => {
+                                    let mut s = match &r.error {
+                                        Some(e) => format!("the app couldn't look inside it: {e}"),
+                                        None => "the app couldn't look inside it".to_string(),
+                                    };
+                                    if let Some(n) = r.private_files_note() {
+                                        s = format!("{s}, and {n}");
+                                    }
+                                    s
+                                }
                                 Some(g) if g.has_local_work() => g.local_work_reasons().join(", "),
                                 // Everything is pushed; it was just used recently.
                                 Some(_) => r
@@ -1161,6 +1179,7 @@ impl AgentCleanup {
                         }
                     });
                     Row {
+                        path: r.path.clone(),
                         name: r.name(),
                         size: r.size_bytes,
                         icon: verdict_icon(v),
@@ -1208,8 +1227,8 @@ impl AgentCleanup {
         } else if c.what == ConfirmFor::Downloads {
             (
                 "Nothing outside your Downloads folder uses these. Empty the Recycle Bin afterwards to get the space back.",
-                "",
-                "",
+                "These look private, and may be the only copy:",
+                "I've saved these somewhere else, or don't need them",
             )
         } else if c.what == ConfirmFor::Trail {
             (
@@ -1266,10 +1285,24 @@ impl AgentCleanup {
         }
 
         let ack = c.ack;
+        // When only some need a look, the main button takes just the safe
+        // ones, so a quick click never removes anything risky.
+        let safe_paths: Vec<PathBuf> = rows
+            .iter()
+            .filter(|r| r.risk.is_none())
+            .map(|r| r.path.clone())
+            .collect();
+        let mixed = needs_ack && !safe_paths.is_empty();
+        let what = c.what;
+        let go_label = if mixed {
+            format!("Recycle all {}", rows.len())
+        } else {
+            "Move to Recycle Bin".to_string()
+        };
         let go_btn = icon_button(
             "confirm-go",
             IconName::Trash,
-            "Move to Recycle Bin",
+            go_label,
             if needs_ack {
                 ButtonKind::Danger
             } else {
@@ -1279,20 +1312,34 @@ impl AgentCleanup {
         let go_btn = if can_go {
             go_btn.on_click(cx.listener(|this, _, _, cx| {
                 if let Some(c) = this.confirm.take() {
-                    match c.what {
-                        ConfirmFor::Repos => this.recycle(&c.paths),
-                        ConfirmFor::Trail => this.recycle_trail(&c.paths),
-                        ConfirmFor::Junk => this.recycle_junk(&c.paths),
-                        ConfirmFor::Downloads => this.recycle_downloads(&c.paths),
-                        ConfirmFor::AgentData => this.recycle_agentdata(&c.paths),
-                        ConfirmFor::Duplicates => this.recycle(&c.paths),
-                    }
+                    this.run_recycle(c.what, &c.paths);
                 }
                 cx.notify();
             }))
+        } else if mixed {
+            disabled(go_btn).tip("Tick the box above to include the ones that need a look")
         } else {
             disabled(go_btn).tip("Tick the box above first")
         };
+        let safe_btn = mixed.then(|| {
+            let n = safe_paths.len();
+            icon_button(
+                "confirm-safe",
+                IconName::ShieldCheck,
+                if n == 1 {
+                    "Recycle only the safe one".to_string()
+                } else {
+                    format!("Recycle only the {n} safe ones")
+                },
+                ButtonKind::Primary,
+            )
+            .tip("Leaves the ones marked above where they are")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.confirm = None;
+                this.run_recycle(what, &safe_paths);
+                cx.notify();
+            }))
+        });
 
         Some(
             div()
@@ -1405,7 +1452,8 @@ impl AgentCleanup {
                                         cx.notify();
                                     },
                                 )))
-                                .child(go_btn),
+                                .child(go_btn)
+                                .children(safe_btn),
                         ),
                 ),
         )

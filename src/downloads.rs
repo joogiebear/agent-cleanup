@@ -120,6 +120,12 @@ impl Download {
                 "An installer. Once the program is installed you don't need it, and you can get it again from the program's website.".to_string(),
             );
         }
+        if self.looks_private() {
+            return (
+                DownloadAdvice::YourCall,
+                "This looks like a private file: passwords and settings (.env), a key, a password store or a database. It may be the only copy, so keep it somewhere safe. Don't move it into a project folder, where it could be uploaded to GitHub by accident.".to_string(),
+            );
+        }
         if let Some(m) = &self.matched {
             let project = m
                 .project
@@ -147,6 +153,11 @@ impl Download {
             }
         };
         (DownloadAdvice::YourCall, text.to_string())
+    }
+
+    /// A file whose name says it holds passwords, keys or data.
+    pub fn looks_private(&self) -> bool {
+        !self.is_dir && crate::private::looks_private(&self.name())
     }
 
     /// Where [`move_into`] would put it.

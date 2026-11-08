@@ -485,6 +485,17 @@ impl AgentCleanup {
         self.page = page;
     }
 
+    /// Recycles what a confirm dialog was about.
+    pub fn run_recycle(&mut self, what: ConfirmFor, paths: &[PathBuf]) {
+        match what {
+            ConfirmFor::Repos | ConfirmFor::Duplicates => self.recycle(paths),
+            ConfirmFor::Trail => self.recycle_trail(paths),
+            ConfirmFor::Junk => self.recycle_junk(paths),
+            ConfirmFor::Downloads => self.recycle_downloads(paths),
+            ConfirmFor::AgentData => self.recycle_agentdata(paths),
+        }
+    }
+
     pub fn ask_recycle(&mut self, paths: Vec<PathBuf>) {
         if !paths.is_empty() {
             self.confirm = Some(Confirm {
