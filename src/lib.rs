@@ -10,6 +10,7 @@ pub mod config;
 pub mod deps;
 pub mod downloads;
 pub mod dupes;
+pub mod footprint;
 pub mod git;
 pub mod junk;
 pub mod library;

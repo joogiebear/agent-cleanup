@@ -96,6 +96,27 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 
 ![Confirm dialog](docs/confirm-dialog.png)
 
+## What it leaves on your PC
+
+A cleanup tool shouldn't make its own mess, so here is everything Agent Cleanup writes, and nothing else:
+
+| What | Where | When |
+| --- | --- | --- |
+| The app | wherever you put `agent-cleanup-<version>-windows-x64.exe` | You downloaded it. There's no installer, no registry entries, no Start menu shortcut and no background service. |
+| `config.toml` | `%APPDATA%\agent-cleanup\config\` | Your settings: project folders, hidden repos, the stale days. A few KB. |
+| `last_scan.toml` | same folder | The last scan's results, so the app opens instantly. Replaced on every scan, never grows past one scan. |
+| `actions.log` | same folder | One line per thing moved or put back, so there's always a record. |
+| "Agent Cleanup weekly check" | Windows Task Scheduler | Only while **Weekly check** is on. Turning it off deletes the task. |
+| `agent-cleanup.update.exe` | next to the exe | Only while an update downloads. Deleted when it's done or fails. |
+| `.agent-cleanup.*.__relocated__.exe` and similar | next to the exe, then `%TEMP%` | The old exe while an update swaps it out. Windows deletes it as the old copy exits. |
+| `agent-cleanup-task.xml` | `%TEMP%` | For a moment while turning the weekly check on. Deleted right away. |
+
+If the app is killed in the middle of an update or while turning the weekly check on, the temporary files above can stay behind. The next time it starts, it deletes any that are more than 10 minutes old. Only files with exactly these names are touched.
+
+Two things are Windows' own, not the app's: whatever you recycle sits in the **Recycle Bin** until you empty it (that's what makes Undo work), and weekly check notifications appear under Windows PowerShell in the notification center, because Windows needs a registered app to show them and the app doesn't register itself.
+
+**Remove all app data** in Settings deletes the task, the config folder and any leftover temp files in one go (after asking), then closes the app. Delete the exe afterwards and nothing of Agent Cleanup is left.
+
 ## Getting the app
 
 **Download:** get `agent-cleanup-<version>-windows-x64.exe` from the [latest release](../../releases/latest) and run it. Windows SmartScreen may warn you the first time because the file isn't code-signed. Click **More info**, then **Run anyway**.
@@ -129,4 +150,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).

@@ -173,7 +173,7 @@ mod imp {
         for unit in task_xml(&exe).encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        let file = std::env::temp_dir().join("agent-cleanup-task.xml");
+        let file = std::env::temp_dir().join(crate::footprint::TASK_XML);
         std::fs::write(&file, bytes)?;
         let out = schtasks(&[
             "/Create".as_ref(),
@@ -192,7 +192,8 @@ mod imp {
         Ok(())
     }
 
-    pub fn disable() -> anyhow::Result<()> {
+    /// Removes the task without writing to the action log.
+    pub fn delete_task() -> anyhow::Result<()> {
         let out = schtasks(&[
             "/Delete".as_ref(),
             "/TN".as_ref(),
@@ -202,6 +203,11 @@ mod imp {
         if !out.status.success() {
             return Err(fail(&out));
         }
+        Ok(())
+    }
+
+    pub fn disable() -> anyhow::Result<()> {
+        delete_task()?;
         if let Ok(exe) = std::env::current_exe() {
             crate::actions::log_action("turned off the weekly check", &exe);
         }
@@ -225,12 +231,16 @@ mod imp {
         anyhow::bail!("the weekly check uses Windows Task Scheduler")
     }
 
+    pub fn delete_task() -> anyhow::Result<()> {
+        anyhow::bail!("the weekly check uses Windows Task Scheduler")
+    }
+
     pub fn disable() -> anyhow::Result<()> {
         anyhow::bail!("the weekly check uses Windows Task Scheduler")
     }
 }
 
-pub use imp::{disable, enable, repair_if_moved, status};
+pub use imp::{delete_task, disable, enable, repair_if_moved, status};
 
 #[cfg(test)]
 mod tests {
