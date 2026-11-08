@@ -31,8 +31,8 @@ fn kind_color(kind: Kind) -> Rgba {
 
 fn kind_tip(kind: Kind) -> &'static str {
     match kind {
-        Kind::Clone => "The agent cloned this repo here",
-        Kind::Download => "The agent downloaded this with curl or wget",
+        Kind::Clone => "The agent downloaded a copy of a project (cloned a repo) here",
+        Kind::Download => "The agent downloaded this file from the internet",
         Kind::File => "The agent created this file",
         Kind::Edited => "The agent changed this file, but it was already there",
     }
@@ -80,7 +80,7 @@ impl AgentCleanup {
             if loading { "Reading..." } else { "Refresh" },
             ButtonKind::Secondary,
         )
-        .tip("Read the session logs again")
+        .tip("Read the AI tools' history again")
         .on_click(cx.listener(|this, _, _, cx| {
             this.load_trail();
             cx.notify();
@@ -104,7 +104,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Agent trail",
-                "Files, downloads and repos that Claude Code and Codex made outside the project they were working in.",
+                "Files, downloads and project copies that Claude Code and Codex created outside the project they were working on.",
             )))
             .child(refresh)
             .children(clean);
@@ -148,7 +148,7 @@ impl AgentCleanup {
                     IconName::Hourglass,
                     "Reading session logs...",
                     format!(
-                        "Going through {} logs from ~/.claude and ~/.codex. Nothing is changed.",
+                        "Going through {} chat histories from Claude Code and Codex. Nothing is changed.",
                         t.logs
                     ),
                 ))
@@ -166,7 +166,8 @@ impl AgentCleanup {
                 .child(empty_state(
                     IconName::ShieldCheck,
                     "Nothing left behind",
-                    "Every file and clone in the logs is inside a project, already gone, or hidden.".into(),
+                    "Everything the agents made is inside a project, already gone, or hidden."
+                        .into(),
                 ))
                 .into_any_element()
         } else {
@@ -276,7 +277,7 @@ impl AgentCleanup {
                     .text_color(GREEN)
                     .child(icon(IconName::ShieldCheck, 13., GREEN))
                     .child(if g.remote_url.is_some() {
-                        "Pushed, nothing local"
+                        "Saved online, nothing unsaved"
                     } else {
                         "Clean"
                     }),

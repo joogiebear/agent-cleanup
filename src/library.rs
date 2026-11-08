@@ -44,12 +44,16 @@ impl Filter {
 
     pub fn tooltip(self) -> &'static str {
         match self {
-            Filter::Strays => "Every repo found outside your project folders.",
+            Filter::Strays => {
+                "Every project copy (git repo) found outside your project folders. These are the ones to look at."
+            }
             Filter::SafeToRemove => Verdict::SafeToRemove.explanation(),
             Filter::UnsavedWork => Verdict::UnsavedWork.explanation(),
             Filter::Unreadable => Verdict::Unreadable.explanation(),
             Filter::StrayActive => Verdict::StrayActive.explanation(),
-            Filter::All => "Every repo found, including the ones inside your project folders.",
+            Filter::All => {
+                "Everything found, including the projects inside your own project folders."
+            }
         }
     }
 

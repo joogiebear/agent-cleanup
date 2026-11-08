@@ -71,7 +71,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Agent data",
-                "Claude Code and Codex session history for projects you've deleted. The sessions can't be resumed without the project.",
+                "Chat history that Claude Code and Codex kept for projects you've since deleted. Without the project those chats can't be picked up again, so they just take space.",
             )))
             .child(refresh)
             .children(clean);
@@ -105,7 +105,7 @@ impl AgentCleanup {
                 .child(empty_state(
                     IconName::Hourglass,
                     "Looking through agent data...",
-                    "Reading ~/.claude and ~/.codex to see which projects still exist. Nothing is changed.".into(),
+                    "Reading the AI tools' history folders to see which projects still exist. Nothing is changed.".into(),
                 ))
                 .into_any_element()
         } else if a.items.is_empty() {

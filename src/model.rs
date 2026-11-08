@@ -41,7 +41,7 @@ impl Verdict {
             Verdict::SafeToRemove => "Safe to remove",
             Verdict::UnsavedWork => "Has unsaved work",
             Verdict::Unreadable => "Couldn't check",
-            Verdict::StrayActive => "Stray, recent",
+            Verdict::StrayActive => "Used recently",
             Verdict::InProject => "In a project",
             Verdict::Checking => "Checking…",
         }
@@ -50,17 +50,19 @@ impl Verdict {
     pub fn explanation(self) -> &'static str {
         match self {
             Verdict::SafeToRemove => {
-                "Outside your project folders, untouched for a while, and everything in it is already pushed."
+                "A copy of a project outside your project folders. It hasn't been used in a while and everything in it is already saved online (for example on GitHub), so removing it loses nothing."
             }
             Verdict::UnsavedWork => {
-                "Outside your project folders, but it has work that exists only on this PC. Review before removing."
+                "Outside your project folders, and some of its work is saved only on this PC. Removing it would lose that work, so check it first."
             }
             Verdict::Unreadable => {
-                "Git couldn't read it, so the app can't tell whether it holds unsaved work. Copies in a temp folder are almost always throwaway agent clones. Anything else, open it and look first."
+                "The app couldn't look inside it, so it can't tell whether it holds unsaved work. Copies in a temp folder are almost always throwaway copies an AI agent made. Anywhere else, open it and look first."
             }
-            Verdict::StrayActive => "Outside your project folders, but it was used recently.",
-            Verdict::InProject => "Inside one of your project folders.",
-            Verdict::Checking => "Still reading git state.",
+            Verdict::StrayActive => {
+                "Outside your project folders, but it was used in the last few days, so it may still be in use."
+            }
+            Verdict::InProject => "Inside one of your project folders, so the app leaves it alone.",
+            Verdict::Checking => "Still checking what's in it.",
         }
     }
 }
@@ -139,8 +141,8 @@ impl Repo {
         }
         if v == Verdict::Unreadable {
             steps.push(match &self.error {
-                Some(e) => format!("Git couldn't read this repo: {e}"),
-                None => "Git couldn't read this repo.".to_string(),
+                Some(e) => format!("The app couldn't look inside it. Git (the tool that tracks its history) said: {e}"),
+                None => "The app couldn't look inside it.".to_string(),
             });
             if self.in_temp_folder() {
                 steps.push(
@@ -166,27 +168,28 @@ impl Repo {
         if let Some(g) = &self.git {
             if g.changed_files > 0 {
                 steps.push(format!(
-                    "Review the {} with `git status`, then commit what you want to keep.",
+                    "It has {} that {} never saved into its history (committed). To keep them, ask the AI agent that made it to commit them, or run `git status` in a terminal here to see them.",
                     if g.changed_files == 1 {
-                        "changed file".to_string()
+                        "1 edited file".to_string()
                     } else {
-                        format!("{} changed files", g.changed_files)
-                    }
+                        format!("{} edited files", g.changed_files)
+                    },
+                    if g.changed_files == 1 { "was" } else { "were" }
                 ));
             }
             if g.stashes > 0 {
                 steps.push(
-                    "Check `git stash list`. Stashes are lost when the folder is removed."
+                    "It has changes set aside for later (a stash), which are lost if the folder is removed. Run `git stash list` in a terminal here to see them."
                         .to_string(),
                 );
             }
             match (&g.remote_url, g.unpushed_commits) {
                 (Some(_), n) if n > 0 => steps.push(format!(
-                    "Run `git push` to upload the {}. Local-only branches need `git push -u origin <branch>`.",
-                    if n == 1 { "commit".to_string() } else { format!("{n} commits") }
+                    "It has {} saved on this PC but not uploaded (pushed). To keep them, ask your agent to push them, or run `git push` in a terminal here.",
+                    if n == 1 { "1 saved version".to_string() } else { format!("{n} saved versions") }
                 )),
                 (None, _) => steps.push(
-                    "It isn't on GitHub. To keep it, create a GitHub repo and push to it, or mark this folder as a project."
+                    "It isn't on GitHub or anywhere else online, so this folder is the only copy. If it matters, ask your agent to put it on GitHub, or mark this folder as a project."
                         .to_string(),
                 ),
                 _ => {}
@@ -194,16 +197,23 @@ impl Repo {
         }
         match v {
             Verdict::SafeToRemove => steps.push(format!(
-                "Nothing to save. Recycle it to free {}. You can clone it again later.",
+                "Nothing to save. Recycle it to free {}. It's saved online, so it can be downloaded (cloned) again later.",
                 self.size_bytes.map(human_size).unwrap_or_else(|| "space".into())
             )),
             Verdict::StrayActive => steps.push(
-                "It was used recently. If it's real work, mark it as a project. Otherwise check back later."
+                "It was used recently, so it might still be in use. If it's your real work, mark it as a project. Otherwise check back in a few days."
                     .to_string(),
             ),
-            Verdict::UnsavedWork => steps.push(
-                "Once that's done, rescan and it will show as safe to remove.".to_string(),
-            ),
+            Verdict::UnsavedWork => {
+                steps.push(
+                    "If it was only an experiment and you don't need it, you can recycle it anyway. You'll confirm first, and it goes to the Recycle Bin."
+                        .to_string(),
+                );
+                steps.push(
+                    "Once the work is saved, scan again and it will show as safe to remove."
+                        .to_string(),
+                );
+            }
             _ => {}
         }
         steps
@@ -212,14 +222,14 @@ impl Repo {
     /// One-line git summary for the table.
     pub fn git_summary(&self) -> String {
         if let Some(e) = &self.error {
-            return format!("Git can't read it: {e}");
+            return format!("Couldn't look inside: {e}");
         }
         let Some(g) = &self.git else {
             return String::new();
         };
         let reasons = g.local_work_reasons();
         if reasons.is_empty() {
-            "Clean, everything pushed".to_string()
+            "Nothing unsaved, all saved online".to_string()
         } else {
             let mut s = reasons.join(", ");
             if let Some(first) = s.get_mut(0..1) {
@@ -360,9 +370,10 @@ mod tests {
             ..Default::default()
         };
         let steps = inspected("/tmp/x", dirty_unpushed, 30, &cfg, now).next_steps(&cfg, now);
-        assert!(steps[0].contains("2 changed files"));
+        assert!(steps[0].contains("2 edited files"));
         assert!(steps[1].contains("git push"));
-        assert!(steps.last().unwrap().contains("rescan"));
+        assert!(steps.iter().any(|s| s.contains("Recycle Bin")));
+        assert!(steps.last().unwrap().contains("scan again"));
 
         let lone = inspected("/tmp/y", GitState::default(), 30, &cfg, now).next_steps(&cfg, now);
         assert!(lone.iter().any(|s| s.contains("isn't on GitHub")));

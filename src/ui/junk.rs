@@ -28,7 +28,7 @@ impl AgentCleanup {
             if loading { "Looking..." } else { "Refresh" },
             ButtonKind::Secondary,
         )
-        .tip("Look through your repos again")
+        .tip("Look through your projects again")
         .on_click(cx.listener(|this, _, _, cx| {
             this.load_junk();
             cx.notify();
@@ -57,7 +57,7 @@ impl AgentCleanup {
             .gap_3()
             .child(div().flex_1().min_w_0().child(page_header(
                 "Build junk",
-                "Dependency and build folders inside your repos, like node_modules and target. One command brings each one back.",
+                "Folders of downloaded libraries and build files inside your projects, like node_modules. They're big, and the project can recreate them with one command when it's needed again.",
             )))
             .child(refresh)
             .children(clean);
@@ -116,7 +116,7 @@ impl AgentCleanup {
                     empty_state(
                         IconName::FolderSearch,
                         "Scan first",
-                        "Build junk looks inside the repos found by a scan. Run one on the Leftovers page, then come back.".into(),
+                        "Build junk looks inside the projects found by a scan. Run one on the Leftovers page, then come back.".into(),
                     )
                     .child(
                         button("junk-go-scan", "Go to Leftovers", ButtonKind::Secondary).on_click(
@@ -132,9 +132,9 @@ impl AgentCleanup {
             card()
                 .child(empty_state(
                     IconName::Hourglass,
-                    "Looking inside your repos...",
+                    "Looking inside your projects...",
                     format!(
-                        "{} of {} repos checked. Nothing is changed.",
+                        "{} of {} projects checked. Nothing is changed.",
                         self.junk_progress(),
                         j.repos
                     ),
@@ -145,7 +145,7 @@ impl AgentCleanup {
                 .child(empty_state(
                     IconName::ShieldCheck,
                     "No build junk",
-                    "None of your repos has a dependency or build folder that git ignores.".into(),
+                    "None of your projects has a library or build folder that can be safely recreated.".into(),
                 ))
                 .into_any_element()
         } else {
