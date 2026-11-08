@@ -30,8 +30,7 @@ pub struct GitState {
     pub private_files_total: usize,
 }
 
-/// How many private files to keep by name.
-pub const MAX_LISTED: usize = 20;
+pub use crate::private::MAX_LISTED;
 
 impl GitState {
     /// Anything that exists only on this PC and would be lost if the folder went away.
@@ -45,18 +44,7 @@ impl GitState {
 
     /// Up to `n` private file names, with "and N more" when there are more.
     pub fn private_files_preview(&self, n: usize) -> String {
-        let mut s = self
-            .private_files
-            .iter()
-            .take(n)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        let shown = self.private_files.len().min(n);
-        if self.private_files_total > shown {
-            s.push_str(&format!(" and {} more", self.private_files_total - shown));
-        }
-        s
+        crate::private::preview(&self.private_files, self.private_files_total, n)
     }
 
     /// Plain-language list of what would be lost, for warnings.
@@ -308,116 +296,9 @@ pub fn parse_ignored(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Folders that tools recreate or that only hold editor and agent settings.
-const DISPOSABLE_DIRS: &[&str] = &[
-    // Dependencies and build output: one command brings them back.
-    "node_modules",
-    "bower_components",
-    "target",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".tox",
-    ".nox",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".turbo",
-    ".parcel-cache",
-    ".angular",
-    ".expo",
-    ".docusaurus",
-    ".vercel",
-    ".netlify",
-    ".cache",
-    ".nyc_output",
-    ".sass-cache",
-    ".dart_tool",
-    ".gradle",
-    ".terraform",
-    "dist",
-    "build",
-    "out",
-    "coverage",
-    "bin",
-    "obj",
-    "vendor",
-    "Pods",
-    "DerivedData",
-    "storybook-static",
-    // Editor settings.
-    ".idea",
-    ".vs",
-    ".vscode",
-];
-
-/// File endings for logs, caches, compiled output and OS clutter.
-const DISPOSABLE_EXTS: &[&str] = &[
-    "log",
-    "pyc",
-    "pyo",
-    "class",
-    "o",
-    "obj",
-    "pdb",
-    "ilk",
-    "tsbuildinfo",
-    "swp",
-    "swo",
-    "tmp",
-];
-
-const DISPOSABLE_FILES: &[&str] = &[
-    ".DS_Store",
-    "Thumbs.db",
-    "desktop.ini",
-    ".eslintcache",
-    ".stylelintcache",
-    "settings.local.json",
-];
-
-/// True for ignored paths that are safe to lose: build output, caches, logs,
-/// editor settings. Everything else git ignores (`.env`, `*.db`, `data/`...)
-/// may be the only copy of something.
+/// See [`crate::private::is_disposable`].
 pub fn is_disposable(repo: &Path, rel: &str) -> bool {
-    let rel = rel.trim_end_matches('/');
-    let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
-    let Some(name) = parts.last() else {
-        return true;
-    };
-    let dir_hit = parts.iter().any(|p| {
-        DISPOSABLE_DIRS.iter().any(|d| d.eq_ignore_ascii_case(p))
-            || p.to_ascii_lowercase().ends_with(".egg-info")
-    });
-    if dir_hit {
-        return true;
-    }
-    // `env` is often a Python virtual env, but only trust it with the marker.
-    if name.eq_ignore_ascii_case("env") && repo.join(rel).join("pyvenv.cfg").is_file() {
-        return true;
-    }
-    if DISPOSABLE_FILES
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case(name))
-    {
-        // `settings.local.json` only counts in an agent's settings folder.
-        return !name.eq_ignore_ascii_case("settings.local.json")
-            || parts.iter().any(|p| p.eq_ignore_ascii_case(".claude"));
-    }
-    let lower = name.to_ascii_lowercase();
-    if lower.ends_with('~')
-        || lower.starts_with("npm-debug.log")
-        || lower.starts_with("yarn-error.log")
-    {
-        return true;
-    }
-    match lower.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => DISPOSABLE_EXTS.contains(&ext),
-        _ => false,
-    }
+    crate::private::is_disposable(repo, rel)
 }
 
 /// Parses `git status --porcelain=v2 --branch` into (branch, changed entry count).
@@ -514,7 +395,6 @@ mod tests {
         for junk in [
             "node_modules/",
             "packages/app/node_modules/",
-            "target/",
             "src/__pycache__/",
             "debug.log",
             "app/foo.pyc",

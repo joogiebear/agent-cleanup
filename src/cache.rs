@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Bumped when what a scan records changes, so older results get rescanned
-/// instead of shown. 1: git-ignored private files are checked.
-pub const FORMAT: u32 = 1;
+/// instead of shown. 1: git-ignored private files are checked. 2: private
+/// files are looked for in repos git can't read.
+pub const FORMAT: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScanCache {
@@ -97,7 +98,7 @@ mod tests {
         // A cache from before `format` existed is dropped, so it gets rescanned.
         let old = tmp.path().join("old.toml");
         let text = std::fs::read_to_string(&file).unwrap();
-        std::fs::write(&old, text.replace("format = 1\n", "")).unwrap();
+        std::fs::write(&old, text.replace(&format!("format = {FORMAT}\n"), "")).unwrap();
         assert!(ScanCache::load_from(&old, &cfg).is_none());
         assert_eq!(back.repos.len(), 1);
         let r = &back.repos[0];
