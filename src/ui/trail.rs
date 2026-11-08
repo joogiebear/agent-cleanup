@@ -68,23 +68,9 @@ fn advice_tip(a: Advice) -> &'static str {
     }
 }
 
-/// A small coloured tag with the app's call, e.g. "Safe to clean".
+/// A tag with the app's call on a trail item.
 pub fn advice_pill(id: impl Into<ElementId>, a: Advice, text: String) -> Stateful<Div> {
-    let color = advice_color(a);
-    h_flex()
-        .id(id)
-        .flex_none()
-        .gap_1()
-        .px_2()
-        .py(px(2.))
-        .rounded_full()
-        .bg(tint(color, 0.14))
-        .text_color(color)
-        .text_size(px(11.))
-        .font_weight(FontWeight::MEDIUM)
-        .child(icon(advice_icon(a), 12., color))
-        .child(text)
-        .tip(advice_tip(a))
+    verdict_tag(id, advice_color(a), advice_icon(a), text, advice_tip(a))
 }
 
 pub fn empty_state(ic: IconName, title: &str, text: String) -> Div {
@@ -179,56 +165,30 @@ impl AgentCleanup {
                 }
             }
             let accent = if n_safe > 0 { GREEN } else { ORANGE };
+            let action = (n_safe > 0 && !loading).then(|| {
+                let safe = safe.clone();
+                icon_button(
+                    "trail-clean",
+                    IconName::BroomSparkles,
+                    format!("Clean up {}", human_size(safe_bytes)),
+                    ButtonKind::Primary,
+                )
+                .tip("Move every item marked Safe to clean to the Recycle Bin. You'll see the list first, and you can undo.")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.ask_recycle_trail(safe.clone());
+                    cx.notify();
+                }))
+            });
             v_flex()
                 .gap_2()
-                .child(
-                    h_flex()
-                        .gap_4()
-                        .px_5()
-                        .py_4()
-                        .rounded(px(12.))
-                        .bg(tint(accent, 0.10))
-                        .border_1()
-                        .border_color(tint(accent, 0.35))
-                        .child(icon(
-                            if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
-                            24.,
-                            accent,
-                        ))
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(px(16.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(headline),
-                                )
-                                .child(div().text_color(MUTED).text_size(px(13.)).child(text))
-                                .child(tags),
-                        )
-                        .when(n_safe > 0 && !loading, |d| {
-                            let safe = safe.clone();
-                            d.child(
-                                icon_button(
-                                    "trail-clean",
-                                    IconName::BroomSparkles,
-                                    format!("Clean up {}", human_size(safe_bytes)),
-                                    ButtonKind::Primary,
-                                )
-                                .flex_none()
-                                .h(px(40.))
-                                .px_5()
-                                .tip("Move every item marked Safe to clean to the Recycle Bin. You'll see the list first, and you can undo.")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.ask_recycle_trail(safe.clone());
-                                    cx.notify();
-                                })),
-                            )
-                        }),
-                )
+                .child(advice_banner(
+                    accent,
+                    if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
+                    headline,
+                    text,
+                    Some(tags),
+                    action,
+                ))
                 .child(
                     h_flex()
                         .flex_wrap()

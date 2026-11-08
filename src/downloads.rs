@@ -101,10 +101,79 @@ impl Download {
             .unwrap_or_else(|| self.path.display().to_string())
     }
 
+    /// The app's suggestion for this download and why, in plain words.
+    pub fn advice(&self) -> (DownloadAdvice, String) {
+        let name = self.name().to_ascii_lowercase();
+        let ext = self
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let is_self = std::env::current_exe().is_ok_and(|me| me == self.path);
+        let installer = !self.is_dir
+            && !is_self
+            && (matches!(ext.as_str(), "msi" | "msix")
+                || (ext == "exe" && ["setup", "install"].iter().any(|w| name.contains(w))));
+        if installer {
+            return (
+                DownloadAdvice::Safe,
+                "An installer. Once the program is installed you don't need it, and you can get it again from the program's website.".to_string(),
+            );
+        }
+        if let Some(m) = &self.matched {
+            let project = m
+                .project
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            return (
+                DownloadAdvice::Move,
+                format!(
+                    "It looks like it was for {project}. Move it there to keep it with the project, or recycle it if you don't need it any more."
+                ),
+            );
+        }
+        let text = match ext.as_str() {
+            "zip" | "7z" | "rar" | "gz" | "tgz" | "tar" | "xz" | "bz2" | "zst" => {
+                "A compressed file. If you've already unpacked it, the compressed copy isn't needed."
+            }
+            "exe" => {
+                "A program. If you installed it or don't use it, it's fine to remove. If you run it straight from Downloads, keep it."
+            }
+            "iso" | "img" => "A disk image. If you've already used it, it's fine to remove.",
+            _ if self.is_dir => "A folder. Open it to see what's inside before deciding.",
+            _ => {
+                "The app can't tell what this is for. Open it to check, then keep, hide or recycle it."
+            }
+        };
+        (DownloadAdvice::YourCall, text.to_string())
+    }
+
     /// Where [`move_into`] would put it.
     pub fn destination(&self) -> Option<PathBuf> {
         let m = self.matched.as_ref()?;
         Some(m.project.join(self.path.file_name()?))
+    }
+}
+
+/// What the app suggests doing with a download.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadAdvice {
+    /// An installer: not needed once installed.
+    Safe,
+    /// Matched to a project: move it there.
+    Move,
+    /// Only you can tell.
+    YourCall,
+}
+
+impl DownloadAdvice {
+    pub fn label(self) -> &'static str {
+        match self {
+            DownloadAdvice::Safe => "Safe to clean",
+            DownloadAdvice::Move => "Move to project",
+            DownloadAdvice::YourCall => "Your call",
+        }
     }
 }
 
@@ -536,5 +605,31 @@ mod tests {
         assert_eq!(gap_words(600), "10 min");
         assert_eq!(gap_words(5400), "1.5 h");
         assert_eq!(gap_words(7200), "2 h");
+    }
+
+    #[test]
+    fn advice_for_downloads() {
+        let d = |name: &str, matched: Option<Match>| Download {
+            path: PathBuf::from("/dl").join(name),
+            is_dir: false,
+            size_bytes: 1,
+            arrived: SystemTime::UNIX_EPOCH,
+            matched,
+        };
+        assert_eq!(
+            d("App-Setup-1.2.exe", None).advice().0,
+            DownloadAdvice::Safe
+        );
+        assert_eq!(d("thing.msi", None).advice().0, DownloadAdvice::Safe);
+        assert_eq!(d("tool.exe", None).advice().0, DownloadAdvice::YourCall);
+        let m = Match {
+            project: PathBuf::from("/code/site"),
+            source: Source::Git,
+            offset_secs: 60,
+        };
+        let (a, why) = d("logo.png", Some(m)).advice();
+        assert_eq!(a, DownloadAdvice::Move);
+        assert!(why.contains("site"));
+        assert!(d("data.zip", None).advice().1.contains("unpacked"));
     }
 }
