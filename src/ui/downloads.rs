@@ -232,6 +232,22 @@ impl AgentCleanup {
             let mut groups = v_flex().gap_5();
             for (project, items) in downloads::by_project(&d.items) {
                 let size: u64 = items.iter().map(|i| i.size_bytes).sum();
+                let prompt = {
+                    let entries: Vec<_> = items
+                        .iter()
+                        .map(|i| {
+                            agent_cleanup::prompts::Entry::new(
+                                i.path.clone(),
+                                i.matched.as_ref().map(|m| m.reason()),
+                            )
+                        })
+                        .collect();
+                    agent_cleanup::prompts::downloads_group(
+                        (!project.as_os_str().is_empty()).then_some(project.as_path()),
+                        &entries,
+                    )
+                };
+                let pkey = project.display().to_string();
                 let (label, tip) = if project.as_os_str().is_empty() {
                     (
                         "No clear project".to_string(),
@@ -282,6 +298,13 @@ impl AgentCleanup {
                                         .text_size(px(11.))
                                         .text_color(FAINT)
                                         .child(human_size(size)),
+                                )
+                                .child(
+                                    prompt_button(SharedString::from(format!("dl-prompt-{pkey}")))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.copy_prompt(prompt.clone(), cx);
+                                            cx.notify();
+                                        })),
                                 )
                                 .tip(tip),
                         )

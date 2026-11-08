@@ -222,6 +222,22 @@ pub fn by_project(items: &[Item]) -> Vec<(PathBuf, Vec<&Item>)> {
     groups
 }
 
+/// A ready-to-paste agent prompt for one [`by_project`] group.
+pub fn prompt_for(project: &Path, items: &[&Item]) -> Option<String> {
+    let entries: Vec<_> = items
+        .iter()
+        .map(|i| {
+            let mut note = vec![
+                i.kind.label().to_lowercase(),
+                i.advice().label().to_lowercase(),
+            ];
+            note.extend(i.warnings());
+            crate::prompts::Entry::new(i.path.clone(), Some(note.join(", ")))
+        })
+        .collect();
+    crate::prompts::trail_group(project, &entries)
+}
+
 /// Items that look safe to recycle without a second look.
 pub fn safe_paths(items: &[Item]) -> Vec<PathBuf> {
     items

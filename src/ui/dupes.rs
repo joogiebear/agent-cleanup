@@ -149,6 +149,20 @@ impl AgentCleanup {
     }
 
     fn dupe_group(&self, g: &Group, now: SystemTime, cx: &mut Context<Self>) -> Div {
+        let entries: Vec<_> = g
+            .copies
+            .iter()
+            .filter_map(|p| self.lib.get(p))
+            .map(|r| {
+                let note = if r.path == g.keep {
+                    "the copy I want to keep".to_string()
+                } else {
+                    r.git_summary().to_lowercase()
+                };
+                agent_cleanup::prompts::Entry::new(r.path.clone(), Some(note))
+            })
+            .collect();
+        let prompt = agent_cleanup::prompts::dupes_group(&g.keep, &entries);
         let mut rows = v_flex();
         for (i, p) in g.copies.iter().enumerate() {
             let Some(r) = self.lib.get(p) else {
@@ -177,6 +191,16 @@ impl AgentCleanup {
                             .text_size(px(11.))
                             .text_color(FAINT)
                             .child(format!("{} copies", g.copies.len())),
+                    )
+                    .child(
+                        prompt_button(SharedString::from(format!(
+                            "dup-prompt-{}",
+                            g.keep.display()
+                        )))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_prompt(prompt.clone(), cx);
+                            cx.notify();
+                        })),
                     ),
             )
             .child(card().child(rows))

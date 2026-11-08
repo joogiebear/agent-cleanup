@@ -259,6 +259,7 @@ impl AgentCleanup {
                     .map(|i| i.size_bytes)
                     .sum();
                 let group_key = project.display().to_string();
+                let prompt = trail::prompt_for(&project, &items);
                 let label = if project.as_os_str().is_empty() {
                     "Unknown folder".to_string()
                 } else {
@@ -290,6 +291,15 @@ impl AgentCleanup {
                                         .text_size(px(11.))
                                         .text_color(FAINT)
                                         .child(human_size(size)),
+                                )
+                                .child(
+                                    prompt_button(SharedString::from(format!(
+                                        "trail-prompt-{group_key}"
+                                    )))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy_prompt(prompt.clone(), cx);
+                                        cx.notify();
+                                    })),
                                 )
                                 .when(!group_safe.is_empty() && !loading, |d| {
                                     let n = group_safe.len();

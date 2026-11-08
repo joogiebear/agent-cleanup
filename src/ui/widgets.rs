@@ -292,3 +292,11 @@ pub fn advice_banner(
         )
         .children(action.map(|a| a.flex_none().h(px(40.)).px_5()))
 }
+
+/// "Copy prompt for your agent": the caller adds the click handler.
+pub fn prompt_button(id: impl Into<ElementId>) -> Stateful<Div> {
+    icon_button(id, IconName::Bot, "Copy prompt for your agent", ButtonKind::Ghost)
+        .flex_none()
+        .h(px(28.))
+        .tip("Copies a request you can paste into Claude Code or Codex. It lists these items, says what to do with them, and tells the agent not to delete anything. It only includes the paths you see here.")
+}
