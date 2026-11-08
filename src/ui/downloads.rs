@@ -5,7 +5,7 @@ use super::app::AgentCleanup;
 use super::theme::*;
 use super::trail::empty_state;
 use super::widgets::*;
-use agent_cleanup::downloads::{self, Download};
+use agent_cleanup::downloads::{self, Download, DownloadAdvice};
 use agent_cleanup::model::{human_size, relative_time};
 use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
@@ -34,6 +34,27 @@ pub fn download_icon(d: &Download) -> IconName {
         | "html" | "xml" => IconName::FileCode,
         _ => IconName::FileText,
     }
+}
+
+fn advice_tag(id: impl Into<ElementId>, a: DownloadAdvice, text: String) -> Stateful<Div> {
+    let (color, ic, tip) = match a {
+        DownloadAdvice::Safe => (
+            GREEN,
+            IconName::CircleCheck,
+            "An installer. Not needed once the program is installed.",
+        ),
+        DownloadAdvice::Move => (
+            ACCENT,
+            IconName::FolderInput,
+            "Looks like it was for one of your projects. Use the move button to put it there.",
+        ),
+        DownloadAdvice::YourCall => (
+            MUTED,
+            IconName::CircleQuestionMark,
+            "The app can't tell whether you need it. Open it to check.",
+        ),
+    };
+    verdict_tag(id, color, ic, text, tip)
 }
 
 impl AgentCleanup {
@@ -81,31 +102,100 @@ impl AgentCleanup {
             .child(refresh);
 
         let summary = (d.loaded && !d.items.is_empty()).then(|| {
-            let matched = d.items.iter().filter(|i| i.matched.is_some()).count();
             let total: u64 = d.items.iter().map(|i| i.size_bytes).sum();
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_1()
-                .text_size(px(13.))
-                .text_color(MUTED)
-                .child(meta(
-                    IconName::Download,
-                    format!(
-                        "{} download{}, {}",
-                        d.items.len(),
-                        if d.items.len() == 1 { "" } else { "s" },
-                        human_size(total)
-                    ),
+            let advice: Vec<_> = d.items.iter().map(|i| i.advice().0).collect();
+            let count = |a: DownloadAdvice| advice.iter().filter(|x| **x == a).count();
+            let (n_safe, n_move, n_yours) = (
+                count(DownloadAdvice::Safe),
+                count(DownloadAdvice::Move),
+                count(DownloadAdvice::YourCall),
+            );
+            let safe: Vec<_> = d
+                .items
+                .iter()
+                .filter(|i| i.advice().0 == DownloadAdvice::Safe)
+                .map(|i| i.path.clone())
+                .collect();
+            let safe_bytes: u64 = d
+                .items
+                .iter()
+                .filter(|i| i.advice().0 == DownloadAdvice::Safe)
+                .map(|i| i.size_bytes)
+                .sum();
+            let headline = if n_safe > 0 {
+                format!(
+                    "{n_safe} installer{} can go, freeing {}",
+                    if n_safe == 1 { "" } else { "s" },
+                    human_size(safe_bytes)
+                )
+            } else if n_move > 0 {
+                format!(
+                    "{n_move} download{} look{} like {} for a project",
+                    if n_move == 1 { "" } else { "s" },
+                    if n_move == 1 { "s" } else { "" },
+                    if n_move == 1 { "it's" } else { "they're" }
+                )
+            } else {
+                "Nothing here is clearly junk".to_string()
+            };
+            let text = "Installers aren't needed once the program is installed. Files that look like they were for a project can be moved into it with one click (and moved back). The rest only you can judge: open them, then keep, hide or recycle. Anything recycled goes to the Recycle Bin first.";
+            let mut tags = h_flex().flex_wrap().gap_2();
+            for (a, n) in [
+                (DownloadAdvice::Safe, n_safe),
+                (DownloadAdvice::Move, n_move),
+                (DownloadAdvice::YourCall, n_yours),
+            ] {
+                if n > 0 {
+                    tags = tags.child(advice_tag(
+                        SharedString::from(format!("dl-sum-{a:?}")),
+                        a,
+                        format!("{n} {}", a.label().to_lowercase()),
+                    ));
+                }
+            }
+            let action = (n_safe > 0 && !loading).then(|| {
+                icon_button(
+                    "dl-clean",
+                    IconName::BroomSparkles,
+                    format!("Clean up {}", human_size(safe_bytes)),
+                    ButtonKind::Primary,
+                )
+                .tip("Recycle the installers marked Safe to clean. You'll see the list first.")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.ask_recycle_downloads(safe.clone());
+                    cx.notify();
+                }))
+            });
+            v_flex()
+                .gap_2()
+                .child(advice_banner(
+                    if n_safe > 0 { GREEN } else { ACCENT },
+                    if n_safe > 0 { IconName::Sparkles } else { IconName::Info },
+                    headline,
+                    text,
+                    Some(tags),
+                    action,
                 ))
-                .child(meta(
-                    IconName::FolderInput,
-                    format!("{matched} matched to a project"),
-                ))
-                .child(meta(
-                    IconName::Clock,
-                    format!("Last {} days", downloads::DAYS),
-                ))
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_x_4()
+                        .text_size(px(12.))
+                        .text_color(FAINT)
+                        .child(meta(
+                            IconName::Download,
+                            format!(
+                                "{} download{} in total, {}",
+                                d.items.len(),
+                                if d.items.len() == 1 { "" } else { "s" },
+                                human_size(total)
+                            ),
+                        ))
+                        .child(meta(
+                            IconName::Clock,
+                            format!("Arrived in the last {} days", downloads::DAYS),
+                        )),
+                )
         });
 
         let body: AnyElement = if !d.loaded {
@@ -230,6 +320,7 @@ impl AgentCleanup {
             it.path.clone(),
         );
         let color = if it.matched.is_some() { ACCENT } else { MUTED };
+        let (advice, why) = it.advice();
         let mut facts = h_flex()
             .flex_wrap()
             .gap_x_3()
@@ -289,12 +380,23 @@ impl AgentCleanup {
                     .min_w_0()
                     .gap_1()
                     .child(
-                        div()
+                        h_flex()
+                            .gap_2()
                             .min_w_0()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(it.name()),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(it.name()),
+                            )
+                            .child(advice_tag(
+                                SharedString::from(format!("dl-tag-{key}")),
+                                advice,
+                                advice.label().to_string(),
+                            )),
                     )
+                    .child(div().text_size(px(12.)).text_color(MUTED).child(why))
                     .child(facts),
             )
             .child(
