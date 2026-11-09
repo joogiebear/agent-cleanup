@@ -203,6 +203,41 @@ impl Library {
         removed
     }
 
+    /// Reads git again for the repos in `paths` that the last scan found
+    /// nothing unsaved in, right before they're recycled. The scan can be
+    /// days old (results are saved between runs), and work may have been done
+    /// in a repo since. Any that now hold unsaved work, or that git can no
+    /// longer read, are updated in the list and returned, so the caller
+    /// leaves them where they are.
+    pub fn recheck_clean(&mut self, paths: &[PathBuf]) -> Vec<PathBuf> {
+        let mut changed = Vec::new();
+        for p in paths {
+            let Some(&i) = self.index.get(p) else {
+                continue;
+            };
+            let r = &mut self.repos[i];
+            // Already flagged: the confirm dialog showed what would be lost.
+            // Gone from disk: recycling reports that itself.
+            if !r.inspected || r.has_local_work() || !p.exists() {
+                continue;
+            }
+            match crate::git::inspect(p) {
+                Ok(g) if !g.has_local_work() => r.git = Some(g),
+                Ok(g) => {
+                    r.git = Some(g);
+                    changed.push(p.clone());
+                }
+                Err(e) => {
+                    r.git = None;
+                    r.error = Some(e.to_string());
+                    (r.private_files, r.private_files_total) = crate::private::find(p);
+                    changed.push(p.clone());
+                }
+            }
+        }
+        changed
+    }
+
     /// Re-reads which project folder each repo is in after settings change.
     pub fn reclassify(&mut self, cfg: &Config) {
         for r in &mut self.repos {
@@ -370,6 +405,64 @@ mod tests {
         let by_age = lib.visible(Filter::Strays, "", SortBy::Activity, &cfg, now);
         assert_eq!(by_age.first(), Some(&PathBuf::from("/tmp/older-clone")));
         assert!(!by_age.contains(&PathBuf::from("/work/mine")));
+    }
+
+    #[test]
+    fn recheck_catches_work_done_since_the_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let up = tmp.path().join("up");
+        std::fs::create_dir_all(&up).unwrap();
+        git(&up, &["init", "-q"]);
+        git(&up, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(tmp.path(), &["clone", "-q", "up", "same"]);
+        git(tmp.path(), &["clone", "-q", "up", "edited"]);
+        git(tmp.path(), &["clone", "-q", "up", "broken"]);
+        let cfg = Config::default();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let paths: Vec<PathBuf> = ["same", "edited", "broken", "up"]
+            .iter()
+            .map(|n| tmp.path().join(n))
+            .collect();
+        let mut lib = Library::new(
+            paths
+                .iter()
+                .map(|p| crate::scan::inspect_repo(p, &cfg, &cancel))
+                .collect(),
+        );
+        assert!(lib.recheck_clean(&paths).is_empty(), "nothing changed yet");
+
+        // Work done after the scan: a new file, and a repo that got damaged.
+        std::fs::write(paths[1].join("notes.txt"), "x").unwrap();
+        std::fs::remove_file(paths[2].join(".git").join("HEAD")).unwrap();
+        // `up` has no remote, so it was already flagged and isn't re-read.
+        assert_eq!(
+            lib.recheck_clean(&paths),
+            vec![paths[1].clone(), paths[2].clone()]
+        );
+        let now = SystemTime::now() + Duration::from_secs(365 * 86_400);
+        assert_eq!(
+            lib.get(&paths[0]).unwrap().verdict(&cfg, now),
+            Verdict::SafeToRemove
+        );
+        assert_eq!(
+            lib.get(&paths[1]).unwrap().verdict(&cfg, now),
+            Verdict::UnsavedWork
+        );
+        assert_eq!(
+            lib.get(&paths[2]).unwrap().verdict(&cfg, now),
+            Verdict::Unreadable
+        );
+        // Asking again doesn't report them twice: they're flagged now.
+        assert!(lib.recheck_clean(&paths).is_empty());
     }
 
     #[test]

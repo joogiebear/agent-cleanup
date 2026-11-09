@@ -47,7 +47,8 @@ const ENV_TEMPLATES: &[&str] = &["example", "sample", "template", "dist", "defau
 /// anything: `.env` files, keys, password stores, databases.
 pub fn looks_private(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    if lower == ".env" || lower.ends_with(".env") && lower.len() > 4 && !lower.starts_with('.') {
+    // `.env`, `prod.env`, `.prod.env`.
+    if lower.ends_with(".env") {
         return true;
     }
     if let Some(rest) = lower.strip_prefix(".env.") {
@@ -320,6 +321,7 @@ mod tests {
             ".env.local",
             ".env.production",
             "prod.env",
+            ".prod.env",
             "app.db",
             "data.sqlite3",
             "app.db-wal",

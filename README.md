@@ -2,7 +2,7 @@
 
 A small, fast Windows app that finds the clutter AI coding agents (Claude Code, Codex and friends) leave behind: repos cloned "for testing" into random folders, stale clones in Downloads or `%TEMP%`, and scratch projects that never made it into your real project folders.
 
-It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI framework behind the Zed editor, plus the [gpui-component](https://github.com/longbridge/gpui-kit) widgets. It's a single native `.exe` (about 30 MB) with no installer, web engine or runtime.
+It's written in Rust with [GPUI](https://www.gpui.rs), the GPU-accelerated UI framework behind the Zed editor, plus the [gpui-component](https://github.com/longbridge/gpui-kit) widgets. It's a single native `.exe` (about 20 MB) with no installer, web engine or runtime.
 
 ![Main window](docs/screenshot.png)
 
@@ -26,7 +26,7 @@ The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **
 
 Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sessions`). The **Agent trail** page reads the last 90 days of those logs, read-only, and lists what an agent made outside the folder it was working in: files it wrote, things it downloaded with `curl` or `wget`, and repos it cloned. Items are grouped by the project the agent was working on, with which agent did it and when.
 
-Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work, or one git can't read) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
+Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work or one git can't read, a private-looking file, or a file inside another repo that isn't one of your projects) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
 
 Downloads, Agent data, Duplicates and Build junk work the same way: a verdict tag and reason on every item, and a banner that says what's safe and what you'd lose.
 
@@ -42,7 +42,7 @@ The **Downloads** page lists what arrived in your Downloads folder in the last 9
 
 Closer events count more. A project needs a clear lead over the next one, otherwise the file goes under **No clear project** rather than getting a wrong guess. Each row says why it matched, like "You used git there 4 min before it arrived".
 
-**Move into project** moves the file into the project's folder (it won't overwrite anything there, and won't copy across drives). Undo moves it back. You can also recycle a download, hide it, or show it in File Explorer.
+**Move into project** moves the file into the project's folder (it won't overwrite anything there, and won't copy across drives). It isn't offered for private-looking files such as a `.env` or a key, so they can't end up committed by accident. Undo moves it back. You can also recycle a download, hide it, or show it in File Explorer.
 
 ![Downloads](docs/downloads.png)
 
@@ -80,7 +80,7 @@ The **Updates** page shows outdated packages in your projects, using each tool's
 
 ## Weekly check
 
-Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app once a week (Mondays, or the next time the PC is on, never on battery) without opening a window. It scans like the app does and saves the results, then shows a notification if there's at least 100 MB or an old repo to clean (including agent data for deleted projects), for example "2 old repos safe to remove (300 MB), 1.2 GB of build folders in idle projects". Clicking it opens the app. The check never moves anything, nothing stays running between checks, and it only counts things the app would mark safe. **Run now** tries it straight away. Turning the switch off removes the task. The app doesn't need to be open for the check to run. If you move or rename the exe, the next time you open it the task is pointed at the new location.
+Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app once a week (Mondays, or the next time the PC is on, never on battery) without opening a window. It scans like the app does and saves the results, then shows a notification if there's at least 100 MB or an old project copy to clean (including agent data for deleted projects), for example "2 old project copies safe to remove (300 MB), 1.2 GB of build folders in idle projects". Clicking it opens the app (the check waits up to an hour for that click, then exits). The check never moves anything, nothing stays running between checks, and it only counts things the app would mark safe. **Run now** tries it straight away. Turning the switch off removes the task. The app doesn't need to be open for the check to run. If you move or rename the exe, the next time you open it the task is pointed at the new location.
 
 ## Cleaning up
 
@@ -96,7 +96,9 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 - Every removal asks first. If any item has unsaved work, the dialog lists exactly what would be lost. When the selection is a mix, the main button recycles only the safe ones; taking the rest too needs a ticked box.
 - Private-looking files (`.env`, keys, certificates, password stores, databases) are never cleaned in one click: in repos git ignores them in, in agent-made folders that aren't repos, in repos git can't read (so the Temp folder "select all" skips those) and in Downloads.
 - Ignored folders named `build`, `dist`, `out`, `bin`, `obj`, `target` or `vendor` only count as rebuildable when the matching build file is right beside them.
-- If git can't read a repo, the app assumes it has unsaved work. It never guesses "safe".
+- If git can't read a repo, or can't count its unpushed commits or stashes, the app assumes it has unsaved work. It never guesses "safe".
+- Scan results are saved between runs, so right before a repo that looked safe is recycled, git is read again. If it has gained unsaved work since the scan, it stays where it is and the app says so.
+- Commits made without a branch (a "detached HEAD", common in agent checkouts) count as unsaved work.
 - Every move and restore is written to `actions.log` in `%APPDATA%\agent-cleanup\config\`, next to `config.toml`, and shown on the Activity page.
 
 ![Confirm dialog](docs/confirm-dialog.png)
@@ -155,4 +157,4 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`) has no UI code and is unit tested. The window lives in `src/ui/`: `app.rs` (state and actions), `leftovers.rs`, `details.rs`, `pages.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`, `private.rs`, `prompts.rs`) has no UI code and is unit tested. `background.rs` is the weekly check, run with `--check`. The window lives in `src/ui/`: `app.rs` (state and actions), one file per page (`leftovers.rs`, `trail.rs`, `downloads.rs`, `agentdata.rs`, `dupes.rs`, `junk.rs`, `updates.rs`, and `pages.rs` for the rest plus the dialogs), `details.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).

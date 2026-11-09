@@ -123,7 +123,13 @@ impl Config {
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        if name == ".git" || self.skip_dir_names.iter().any(|s| s.as_str() == name) {
+        // Windows folder names ignore case (`$RECYCLE.BIN`, `Node_Modules`).
+        if name == ".git"
+            || self
+                .skip_dir_names
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(&name))
+        {
             return true;
         }
         if self.is_skipped_path(path) {
@@ -212,6 +218,7 @@ mod tests {
         assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp")));
         assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp/clone")));
         assert!(cfg.should_skip_dir(Path::new("/h/code/app/node_modules")));
+        assert!(cfg.should_skip_dir(Path::new("/d/$RECYCLE.BIN")));
         assert!(!cfg.should_skip_dir(Path::new("/h/code/app")));
         let everything = Config {
             appdata_temp_only: false,

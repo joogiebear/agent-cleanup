@@ -238,7 +238,11 @@ impl AgentCleanup {
                         .map(|i| {
                             agent_cleanup::prompts::Entry::new(
                                 i.path.clone(),
-                                i.matched.as_ref().map(|m| m.reason()),
+                                if i.looks_private() {
+                                    Some("looks private (passwords, a key or data): keep it out of project folders".into())
+                                } else {
+                                    i.matched.as_ref().map(|m| m.reason())
+                                },
                             )
                         })
                         .collect();
