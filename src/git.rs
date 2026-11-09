@@ -15,7 +15,8 @@ pub struct GitState {
     pub branch: Option<String>,
     /// Modified, staged, conflicted and untracked entries.
     pub changed_files: usize,
-    /// Commits on local branches that aren't on any remote.
+    /// Commits on local branches, or on a checkout that isn't on a branch,
+    /// that aren't on any remote.
     pub unpushed_commits: usize,
     pub stashes: usize,
     /// URL of the first remote (credentials stripped), if the repo has one.
@@ -142,10 +143,13 @@ fn run<'a>(
     // safe.directory: read repos owned by other accounts (common for clones made
     // by tools running elevated) instead of failing with "dubious ownership".
     // core.longpaths: read repos with paths past Windows' 260-character limit.
+    // core.quotepath: print file names with accents as they are, not escaped.
     cmd.arg("-c")
         .arg("safe.directory=*")
         .arg("-c")
         .arg("core.longpaths=true")
+        .arg("-c")
+        .arg("core.quotepath=false")
         .arg("-C")
         .arg(repo)
         .args(args);
@@ -246,20 +250,26 @@ pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
     let remote_url = parse_first_remote(&remotes).map(|u| redact_credentials(&u));
 
     // With no remote every commit is local-only; otherwise count commits on any
-    // local branch that no remote-tracking ref contains.
-    let unpushed_args: &[&str] = if remote_url.is_some() {
-        &["rev-list", "--count", "--branches", "--not", "--remotes"]
-    } else {
-        &["rev-list", "--count", "--branches"]
-    };
-    let unpushed_commits = git(repo, unpushed_args)
+    // local branch that no remote-tracking ref contains. `HEAD` is counted too:
+    // commits made without a branch checked out (a "detached HEAD", which
+    // agents often leave) are on no branch at all. A repo with no commits yet
+    // has no HEAD to name.
+    let mut unpushed_args = vec!["rev-list", "--count", "--branches"];
+    if has_commits(&status) {
+        unpushed_args.push("HEAD");
+    }
+    if remote_url.is_some() {
+        unpushed_args.extend(["--not", "--remotes"]);
+    }
+    // If git can't count them, say so instead of assuming there are none.
+    let unpushed_commits = git(repo, &unpushed_args)
         .ok()
         .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+        .ok_or_else(|| anyhow::anyhow!("git couldn't count the saved versions in it"))?;
 
     let stashes = git(repo, &["stash", "list"])
         .map(|s| s.lines().count())
-        .unwrap_or(0);
+        .map_err(|_| anyhow::anyhow!("git couldn't list the changes set aside in it"))?;
 
     // Fails on a repo with no commits yet; that just means "no last commit".
     let last_commit = git(repo, &["log", "-1", "--all", "--format=%ct"])
@@ -294,6 +304,14 @@ pub fn parse_ignored(s: &str) -> Vec<String> {
         })
         .filter(|p| !p.is_empty())
         .collect()
+}
+
+/// False for a repo with no commits yet, which `git status --porcelain=v2
+/// --branch` reports as `# branch.oid (initial)`.
+fn has_commits(status: &str) -> bool {
+    !status
+        .lines()
+        .any(|l| l.trim_end() == "# branch.oid (initial)")
 }
 
 /// See [`crate::private::is_disposable`].
@@ -456,6 +474,48 @@ mod tests {
             "{:?}",
             g.local_work_reasons()
         );
+    }
+
+    #[test]
+    fn counts_commits_made_without_a_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let up = tmp.path().join("up");
+        std::fs::create_dir_all(&up).unwrap();
+        git(&up, &["init", "-q"]);
+        git(&up, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let clone = tmp.path().join("clone");
+        git(tmp.path(), &["clone", "-q", "up", "clone"]);
+        assert_eq!(inspect(&clone).unwrap().unpushed_commits, 0);
+
+        // A commit with no branch checked out is on no branch and no remote.
+        git(&clone, &["checkout", "-q", "--detach"]);
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "local"]);
+        let g = inspect(&clone).unwrap();
+        assert_eq!(g.branch, None);
+        assert_eq!(g.unpushed_commits, 1);
+        assert!(g.has_local_work());
+
+        // No commits at all is fine, with or without a remote.
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        git(&empty, &["init", "-q"]);
+        assert_eq!(inspect(&empty).unwrap().unpushed_commits, 0);
+        git(
+            &empty,
+            &["remote", "add", "origin", "https://example.com/a/b"],
+        );
+        let g = inspect(&empty).unwrap();
+        assert_eq!((g.unpushed_commits, g.stashes), (0, 0));
+        assert!(!g.has_local_work());
     }
 
     #[test]

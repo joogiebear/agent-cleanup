@@ -160,8 +160,12 @@ impl Download {
         !self.is_dir && crate::private::looks_private(&self.name())
     }
 
-    /// Where [`move_into`] would put it.
+    /// Where [`move_into`] would put it. Nowhere for a private-looking file:
+    /// inside a project it could be uploaded with the project by accident.
     pub fn destination(&self) -> Option<PathBuf> {
+        if self.looks_private() {
+            return None;
+        }
         let m = self.matched.as_ref()?;
         Some(m.project.join(self.path.file_name()?))
     }
@@ -638,9 +642,14 @@ mod tests {
             source: Source::Git,
             offset_secs: 60,
         };
-        let (a, why) = d("logo.png", Some(m)).advice();
+        let (a, why) = d("logo.png", Some(m.clone())).advice();
         assert_eq!(a, DownloadAdvice::Move);
         assert!(why.contains("site"));
+        assert!(d("logo.png", Some(m.clone())).destination().is_some());
+        // A private-looking file is never offered a move into a project.
+        let env = d(".env", Some(m));
+        assert_eq!(env.advice().0, DownloadAdvice::YourCall);
+        assert_eq!(env.destination(), None);
         assert!(d("data.zip", None).advice().1.contains("unpacked"));
     }
 }

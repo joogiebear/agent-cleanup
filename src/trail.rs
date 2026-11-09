@@ -119,6 +119,9 @@ pub struct Item {
     /// database, when git can't vouch for the folder. See [`crate::private`].
     pub private_files: Vec<String>,
     pub private_files_total: usize,
+    /// The git repo it sits inside, when it isn't one itself: a file an
+    /// agent wrote into some other project copy.
+    pub inside_repo: Option<PathBuf>,
 }
 
 impl Item {
@@ -152,6 +155,14 @@ impl Item {
                 Some(g) => out.extend(g.local_work_reasons()),
             }
         }
+        if let Some(repo) = &self.inside_repo {
+            out.push(format!(
+                "it's inside the project copy {}, so it may be part of that project",
+                repo.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| repo.display().to_string())
+            ));
+        }
         if self.private_files_total > 0 {
             out.push(if self.is_dir {
                 format!(
@@ -167,6 +178,27 @@ impl Item {
 
     pub fn needs_care(&self) -> bool {
         !self.warnings().is_empty()
+    }
+
+    /// Reads git again for a project copy that looked fully saved when the
+    /// page was loaded, right before it's recycled. Returns true (and keeps
+    /// what it found) if it now holds unsaved work or can't be read, so the
+    /// caller leaves it where it is.
+    pub fn recheck_clean(&mut self) -> bool {
+        if !self.is_repo() || self.git.as_ref().is_none_or(GitState::has_local_work) {
+            return false;
+        }
+        match git::inspect(&self.path) {
+            Ok(g) => {
+                let unsaved = g.has_local_work();
+                self.git = Some(g);
+                unsaved
+            }
+            Err(_) => {
+                self.git = None;
+                self.path.exists()
+            }
+        }
     }
 
     /// The app's call on this item.
@@ -185,6 +217,10 @@ impl Item {
         match self.advice() {
             Advice::ProbablyYours => "It was already there before the agent changed it, so it's probably one of your own files (like a settings file). Keep it unless you know it's junk.".to_string(),
             Advice::CheckFirst if self.is_repo() && self.git.is_none() => "The app couldn't look inside this project copy, so it can't tell whether it holds unsaved work. Open it and look before removing it.".to_string(),
+            Advice::CheckFirst if self.private_files_total == 0 && self.inside_repo.is_some() => format!(
+                "Take a look before removing this: {}. The agent put it inside another project, so it may be work that project needs.",
+                self.warnings().join(", ")
+            ),
             Advice::CheckFirst if !self.is_repo() => format!(
                 "Take a look before removing this: {}. Files like these hold passwords, keys or data you can't download again. Copy out anything you need first.",
                 self.warnings().join(", ")
@@ -207,7 +243,8 @@ impl Item {
 pub enum Advice {
     /// Made by the agent, nothing unsaved in it: fine to recycle.
     Safe,
-    /// A project copy with unsaved or unknown work.
+    /// A project copy with unsaved or unknown work, something private, or
+    /// a file inside another project copy.
     CheckFirst,
     /// Existed before the agent touched it.
     ProbablyYours,
@@ -854,6 +891,17 @@ pub fn is_stray(
     true
 }
 
+/// The git repo `path` sits inside, if any. Looks up through its parent
+/// folders, stopping at the home folder (a home folder kept in git for
+/// settings files doesn't make everything in it part of a project).
+pub fn enclosing_repo(path: &Path, home: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .skip(1)
+        .take_while(|a| a.parent().is_some() && !crate::config::same_path(a, home))
+        .find(|a| a.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
 /// Reads every recent session log and returns the stray things that still
 /// exist, newest first, one entry per path.
 pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool) -> Vec<Item> {
@@ -906,6 +954,7 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                             existed_before: false,
                             private_files: Vec::new(),
                             private_files_total: 0,
+                            inside_repo: None,
                         },
                     );
                 }
@@ -963,6 +1012,9 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                     it.private_files = vec![it.name()];
                     it.private_files_total = 1;
                 }
+            }
+            if !it.path.join(".git").exists() {
+                it.inside_repo = enclosing_repo(&it.path, home);
             }
             Some(it)
         })
@@ -1106,6 +1158,12 @@ not json
         let stray = downloads.join("notes.md");
         let edited = downloads.join("settings.ini");
         let rewritten = downloads.join("old.txt");
+        // A file written into some other repo that isn't a project folder.
+        let other = home.join("other-repo");
+        let in_repo = other.join("src").join("added.rs");
+        std::fs::create_dir_all(other.join(".git")).unwrap();
+        std::fs::create_dir_all(other.join("src")).unwrap();
+        std::fs::write(&in_repo, "fn main() {}").unwrap();
         std::fs::create_dir_all(&downloads).unwrap();
         std::fs::write(&stray, "hello").unwrap();
         std::fs::write(&edited, "a=1").unwrap();
@@ -1128,6 +1186,7 @@ not json
             line("Write", &home.join("gone.txt"), past),
             line("Write", &proj.join("in-project.txt"), past),
             line("Edit", &edited, past),
+            line("Write", &in_repo, past),
             // Logged long after the file was made: the agent overwrote it.
             line("Write", &rewritten, "2099-01-01T00:00:00Z"),
         ]
@@ -1141,7 +1200,18 @@ not json
         );
         items.sort_by(|a, b| a.path.cmp(&b.path));
         let names: Vec<_> = items.iter().map(Item::name).collect();
-        assert_eq!(names, ["notes.md", "old.txt", "settings.ini"]);
+        assert_eq!(names, ["notes.md", "old.txt", "settings.ini", "added.rs"]);
+
+        let added = &items[3];
+        assert_eq!(added.inside_repo.as_deref(), Some(other.as_path()));
+        assert_eq!(added.advice(), Advice::CheckFirst, "not one-click clean");
+        assert!(
+            added.explain().contains("other-repo"),
+            "{}",
+            added.explain()
+        );
+        assert!(!safe_paths(&items).contains(&in_repo));
+        assert_eq!(items[0].inside_repo, None);
 
         let notes = &items[0];
         assert_eq!(notes.kind, Kind::File);
@@ -1184,6 +1254,7 @@ not json
             existed_before: false,
             private_files: Vec::new(),
             private_files_total: 0,
+            inside_repo: None,
         };
         assert_eq!(base.advice(), Advice::Safe);
         assert!(base.explain().contains("downloaded again"));
