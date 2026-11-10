@@ -88,19 +88,54 @@ impl Config {
 
     /// Loads the saved config, or the defaults if there is none (or it can't be read).
     pub fn load() -> Self {
-        Self::file_path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        Self::load_checked().0
+    }
+
+    /// Like [`Config::load`], and also says where a damaged settings file
+    /// was set aside, so the app can tell the user instead of quietly
+    /// starting over.
+    pub fn load_checked() -> (Self, Option<PathBuf>) {
+        match Self::file_path() {
+            Some(p) => Self::load_from(&p),
+            None => (Self::default(), None),
+        }
+    }
+
+    /// Reads `path`. A file that's there but can't be understood is copied
+    /// to `config.toml.bad` beside it before defaults take over, because
+    /// the next save would otherwise overwrite it.
+    pub fn load_from(path: &Path) -> (Self, Option<PathBuf>) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return (Self::default(), None);
+        };
+        match toml::from_str(&text) {
+            Ok(cfg) => (cfg, None),
+            Err(_) => {
+                let bad = path.with_extension("toml.bad");
+                let kept = std::fs::copy(path, &bad).is_ok();
+                (Self::default(), kept.then_some(bad))
+            }
+        }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
         let path =
             Self::file_path().ok_or_else(|| anyhow::anyhow!("no config folder available"))?;
+        self.save_to(&path)
+    }
+
+    /// Writes to a temporary file and renames it over `path`, so a crash
+    /// or full disk mid-save can't leave half a settings file.
+    pub fn save_to(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         Ok(())
     }
 
@@ -123,7 +158,13 @@ impl Config {
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        if name == ".git" || self.skip_dir_names.iter().any(|s| s.as_str() == name) {
+        // Windows folder names ignore case (`$RECYCLE.BIN`, `Node_Modules`).
+        if name == ".git"
+            || self
+                .skip_dir_names
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(&name))
+        {
             return true;
         }
         if self.is_skipped_path(path) {
@@ -171,6 +212,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_damaged_file_is_kept_and_saves_replace_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        assert_eq!(Config::load_from(&path).1, None, "no file yet is fine");
+
+        let mut cfg = Config::default();
+        cfg.project_roots.push(PathBuf::from("/home/a/projects"));
+        cfg.save_to(&path).unwrap();
+        assert!(!path.with_extension("toml.tmp").exists());
+        let (back, bad) = Config::load_from(&path);
+        assert_eq!(back.project_roots, cfg.project_roots);
+        assert_eq!(bad, None);
+
+        std::fs::write(&path, "project_roots = [oops").unwrap();
+        let (fresh, bad) = Config::load_from(&path);
+        assert!(fresh.project_roots.is_empty());
+        let bad = bad.expect("the damaged file is set aside");
+        assert_eq!(
+            std::fs::read_to_string(bad).unwrap(),
+            "project_roots = [oops"
+        );
+    }
+
+    #[test]
     fn within_checks_whole_components() {
         assert!(path_within(
             Path::new("/home/a/projects/x"),
@@ -212,6 +277,7 @@ mod tests {
         assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp")));
         assert!(!cfg.should_skip_dir(Path::new("/h/AppData/Local/Temp/clone")));
         assert!(cfg.should_skip_dir(Path::new("/h/code/app/node_modules")));
+        assert!(cfg.should_skip_dir(Path::new("/d/$RECYCLE.BIN")));
         assert!(!cfg.should_skip_dir(Path::new("/h/code/app")));
         let everything = Config {
             appdata_temp_only: false,

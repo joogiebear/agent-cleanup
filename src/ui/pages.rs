@@ -188,7 +188,7 @@ impl AgentCleanup {
                                     .child(self.short(root)),
                             )
                             .child(div().text_size(px(12.)).text_color(FAINT).child(format!(
-                                "{repos} repo{} found inside",
+                                "{repos} project{} found inside",
                                 if repos == 1 { "" } else { "s" }
                             ))),
                     )
@@ -387,7 +387,11 @@ impl AgentCleanup {
             let (ic, color) = match e.action.as_str() {
                 "recycled" => (IconName::Trash, RED),
                 "restored" => (IconName::ArchiveRestore, GREEN),
-                _ => (IconName::Download, ACCENT),
+                a if a.starts_with("updated to ") => (IconName::CircleArrowUp, ACCENT),
+                a if a.starts_with("ran ") => (IconName::SquareTerminal, ACCENT),
+                a if a.starts_with("moved back from ") => (IconName::ArchiveRestore, GREEN),
+                a if a.starts_with("moved to ") => (IconName::FolderInput, ACCENT),
+                _ => (IconName::Logs, MUTED),
             };
             if i > 0 {
                 list = list.child(divider());
@@ -676,7 +680,7 @@ impl AgentCleanup {
                                 .text_color(MUTED)
                                 .child(icon(IconName::ShieldCheck, 15., GREEN))
                                 .child(div().flex_1().min_w_0().child(
-                                    "Your repos and files aren't touched. Anything the app moved to the Recycle Bin stays there until you empty it. To uninstall completely, delete agent-cleanup.exe afterwards.",
+                                    "Your projects and files aren't touched. Anything the app moved to the Recycle Bin stays there until you empty it. To uninstall completely, delete agent-cleanup.exe afterwards.",
                                 )),
                         )
                         .child(
@@ -725,7 +729,7 @@ impl AgentCleanup {
                     .gap_1()
                     .child(div().font_weight(FontWeight::MEDIUM).child("Weekly check"))
                     .child(div().text_size(px(13.)).text_color(MUTED).child(
-                        "Every Monday (or the next time your PC is on) the app scans quietly and shows a notification if there's 100 MB or an old repo to clean. Nothing stays running and nothing is moved.",
+                        "Every Monday (or the next time your PC is on) the app scans quietly and shows a notification if there's 100 MB or an old project copy to clean. Nothing stays running in between and nothing is moved.",
                     ))
                     .children(note.map(|(t, c)| div().text_size(px(13.)).text_color(c).child(t))),
             )
@@ -848,13 +852,13 @@ impl AgentCleanup {
                         )
                         .child(words),
                 )
-                .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Check first: they were there before, so they're probably yours."))
-                .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a repo you committed in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back."))
-                .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old repo to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
-                .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week needs a tick first in case the project only moved."))
-                .child(block(IconName::Copy, BLUE, "Duplicates", "The same repo cloned into more than one folder, matched by its remote. One copy is kept (the one in a project folder, or the most recently used; pin another to change it) and Clean up recycles the extra copies that are fully pushed."))
+                .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Probably yours: they were there before, so they're probably yours."))
+                .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a project you saved changes in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back. Private-looking files, like passwords or keys, are never offered a move."))
+                .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old project copy to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
+                .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week, or whose project name turns up in another folder, needs a tick first in case the project only moved."))
+                .child(block(IconName::Copy, BLUE, "Duplicates", "The same project downloaded into more than one folder, matched by the online address it came from. One copy is kept (the one in a project folder, or the most recently used; pin another to change it) and Clean up recycles the extra copies whose work is all saved online."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
-                .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when git shows no uncommitted changes, so you can see and undo what it changed."))
+                .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when the project has no unsaved edits, so you can see and undo what it changed."))
                 .child(block(IconName::Bot, ACCENT, "Hand it to your agent", "Most pages have a Copy prompt for your agent button. It copies a ready-to-paste request for Claude Code or Codex that lists those items and says what to do: save unsaved work, explain what something is, or move a file into its project. The prompt tells the agent not to delete anything, so the removing still happens here, through the Recycle Bin. It only contains the paths and notes you can see on the page."))
                 .child(block(IconName::ShieldCheck, GREEN, "Is it safe?", "Nothing is permanently deleted: Recycle moves folders to the Recycle Bin. You confirm every removal and can undo it right after. One-click buttons only ever take things the app is sure about. If you pick a mix, the main button recycles just the safe ones; anything with unsaved work or private-looking files (like a .env with passwords, a key or a database) needs an extra tick. Every move is written to the Activity page.")),
         )
@@ -1194,7 +1198,7 @@ impl AgentCleanup {
         let needs_ack = !risky.is_empty();
         let can_go = !needs_ack || c.ack;
         let noun = match c.what {
-            ConfirmFor::Repos => "repos",
+            ConfirmFor::Repos => "project copies",
             ConfirmFor::Trail => "items",
             ConfirmFor::Junk => "folders",
             ConfirmFor::Downloads => "downloads",
@@ -1221,7 +1225,7 @@ impl AgentCleanup {
         } else if c.what == ConfirmFor::AgentData {
             (
                 "Their projects are gone, so these sessions can't be resumed anyway. Empty the Recycle Bin afterwards to get the space back.",
-                "Used recently, so the project may have just moved:",
+                "The project may have just moved:",
                 "I don't need these sessions",
             )
         } else if c.what == ConfirmFor::Downloads {

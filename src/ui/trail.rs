@@ -60,7 +60,7 @@ fn advice_tip(a: Advice) -> &'static str {
             "The agent made it outside its project and nothing in it is unsaved. Fine to remove."
         }
         Advice::CheckFirst => {
-            "A project copy with work that isn't saved anywhere else, or that the app couldn't look inside. Look before removing."
+            "Something here needs a look first: work that isn't saved anywhere else, a private file like passwords or a key, a file inside another project, a document the agent wrote for you, something made in the last day, or a folder the app couldn't look inside. Look before removing."
         }
         Advice::ProbablyYours => {
             "It was there before the agent touched it, so it's probably yours. Keep it."
@@ -148,7 +148,7 @@ impl AgentCleanup {
             let text = if n_safe > 0 {
                 "An AI agent made these outside the project it was working on, and nothing in them is unsaved. Cleaning moves them to the Recycle Bin. It doesn't touch your projects or the agents' chat history."
             } else {
-                "Everything here is either a project copy with unsaved work or a file that was probably yours already. Look at each one before removing it."
+                "Everything here either needs a look first (unsaved work, a private file, a document, or something made in the last day) or was probably yours already. Look at each one before removing it."
             };
             let mut tags = h_flex().flex_wrap().gap_2();
             for (a, n) in [

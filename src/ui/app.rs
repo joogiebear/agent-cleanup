@@ -216,7 +216,7 @@ impl AgentCleanup {
             }
         });
 
-        let cfg = Config::load();
+        let (cfg, damaged) = Config::load_checked();
         let cache = ScanCache::load(&cfg);
         let mut app = Self {
             home: directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()),
@@ -255,6 +255,13 @@ impl AgentCleanup {
             cfg,
         };
         window.focus(&app.focus, cx);
+        if let Some(bad) = damaged {
+            let text = format!(
+                "Your settings file was damaged, so the app started with default settings. The old file was kept as {}. Add your project folders again on the Projects page.",
+                app.short(&bad)
+            );
+            app.notify_text(text, true);
+        }
         if app.cfg.check_for_updates {
             app.check_for_updates();
         }
@@ -622,7 +629,7 @@ impl AgentCleanup {
             },
             Ok(g) => self.notify_text(
                 format!(
-                    "{name} has {} uncommitted change{}. Commit or stash first, so you can see and undo what the update changes.",
+                    "{name} has {} unsaved edit{}. Save them in git first (commit or stash), so you can see and undo what the update changes.",
                     g.changed_files,
                     if g.changed_files == 1 { "" } else { "s" }
                 ),
@@ -813,8 +820,10 @@ impl AgentCleanup {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let (cfg, stop) = (self.cfg.clone(), cancel.clone());
+        let repos: Vec<PathBuf> = self.lib.repos().iter().map(|r| r.path.clone()).collect();
         std::thread::spawn(move || {
-            let _ = tx.send(agentdata::find(&home, &cfg, &stop));
+            let known = agentdata::known_projects(&repos, &cfg);
+            let _ = tx.send(agentdata::find(&home, &cfg, &known, &stop));
         });
         self.agentdata.loading = Some((rx, cancel));
     }
@@ -980,6 +989,10 @@ impl AgentCleanup {
         let Some(m) = d.matched.clone() else {
             return;
         };
+        // Private-looking files are never moved into a project.
+        if d.destination().is_none() {
+            return;
+        }
         match downloads::move_into(&d.path, &m.project) {
             Ok(to) => {
                 self.downloads.items.retain(|x| x.path != d.path);
@@ -1100,10 +1113,17 @@ impl AgentCleanup {
     pub fn recycle_trail(&mut self, paths: &[PathBuf]) {
         let mut moved = Vec::new();
         let mut failed = Vec::new();
+        let mut kept = Vec::new();
         for p in paths {
-            let Some(item) = self.trail_item(p).cloned() else {
+            let Some(item) = self.trail.items.iter_mut().find(|i| &i.path == p) else {
                 continue;
             };
+            // A project copy that looked fully saved is read again first.
+            if item.recheck_clean() {
+                kept.push(item.name());
+                continue;
+            }
+            let item = item.clone();
             match actions::recycle(p) {
                 Ok(()) => moved.push(item),
                 Err(e) => failed.push(format!("{} ({e})", item.name())),
@@ -1136,9 +1156,10 @@ impl AgentCleanup {
         if !failed.is_empty() {
             text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
         }
+        text.push_str(&left_alone(&kept));
         self.notice = Some(Notice {
             text: text.trim().to_string(),
-            is_error: !failed.is_empty(),
+            is_error: !failed.is_empty() || !kept.is_empty(),
             shown_at: Instant::now(),
             undo: Vec::new(),
             undo_trail: moved,
@@ -1315,12 +1336,26 @@ impl AgentCleanup {
     }
 
     pub fn recycle(&mut self, paths: &[PathBuf]) {
-        let mut moved_paths = Vec::new();
+        // The list can come from a scan saved days ago. Anything that looked
+        // fully saved is read again now, and left alone if that changed.
+        let changed = self.lib.recheck_clean(paths);
+        let mut moved_paths: Vec<PathBuf> = Vec::new();
         let mut failed = Vec::new();
+        // Outer folders first, so a project copy inside another one that's
+        // also going is known to have gone with it.
+        let mut paths: Vec<&PathBuf> = paths.iter().collect();
+        paths.sort_by_key(|p| p.components().count());
         for p in paths {
+            if changed.contains(p) {
+                continue;
+            }
             let Some(repo) = self.lib.get(p) else {
                 continue;
             };
+            if moved_paths.iter().any(|m| m != p && path_within(p, m)) {
+                moved_paths.push(p.clone());
+                continue;
+            }
             match actions::recycle(p) {
                 Ok(()) => moved_paths.push(p.clone()),
                 Err(e) => failed.push(format!("{} ({e})", repo.name())),
@@ -1350,16 +1385,21 @@ impl AgentCleanup {
                 human_size(freed)
             ),
             n => format!(
-                "Moved {n} repos to the Recycle Bin, freeing {}.",
+                "Moved {n} project copies to the Recycle Bin, freeing {}.",
                 human_size(freed)
             ),
         };
         if !failed.is_empty() {
             text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
         }
+        let kept: Vec<String> = changed
+            .iter()
+            .filter_map(|p| self.lib.get(p).map(|r| r.name()))
+            .collect();
+        text.push_str(&left_alone(&kept));
         self.notice = Some(Notice {
             text: text.trim().to_string(),
-            is_error: !failed.is_empty(),
+            is_error: !failed.is_empty() || !changed.is_empty(),
             shown_at: Instant::now(),
             undo: moved,
             undo_trail: Vec::new(),
@@ -1386,7 +1426,14 @@ impl AgentCleanup {
         }
         let mut failed = Vec::new();
         let mut restored = 0;
+        // Outer folders first: putting one back brings back what's inside.
+        notice.undo.sort_by_key(|r| r.path.components().count());
         for repo in notice.undo {
+            if repo.path.exists() {
+                restored += 1;
+                self.lib.push(repo);
+                continue;
+            }
             match actions::restore(&repo.path) {
                 Ok(()) => {
                     restored += 1;
@@ -1638,6 +1685,21 @@ impl Render for AgentCleanup {
             .children(self.toast(cx))
             .children(self.confirm_dialog(cx))
             .children(self.wipe_dialog(cx))
+    }
+}
+
+/// What a notice says about things that were about to be recycled but
+/// turned out to have changed since the list was made.
+fn left_alone(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!(
+            " Left {one} where it is: it changed since the last scan and now has work that isn't saved anywhere else."
+        ),
+        many => format!(
+            " Left {} where they are: they changed since the last scan and now have work that isn't saved anywhere else.",
+            many.join(", ")
+        ),
     }
 }
 

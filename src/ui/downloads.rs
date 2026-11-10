@@ -41,7 +41,7 @@ fn advice_tag(id: impl Into<ElementId>, a: DownloadAdvice, text: String) -> Stat
         DownloadAdvice::Safe => (
             GREEN,
             IconName::CircleCheck,
-            "An installer. Not needed once the program is installed.",
+            "An installer that arrived over a week ago. Not needed once the program is installed.",
         ),
         DownloadAdvice::Move => (
             ACCENT,
@@ -238,7 +238,11 @@ impl AgentCleanup {
                         .map(|i| {
                             agent_cleanup::prompts::Entry::new(
                                 i.path.clone(),
-                                i.matched.as_ref().map(|m| m.reason()),
+                                if i.looks_private() {
+                                    Some("looks private (passwords, a key or data): keep it out of project folders".into())
+                                } else {
+                                    i.matched.as_ref().map(|m| m.reason())
+                                },
                             )
                         })
                         .collect();
