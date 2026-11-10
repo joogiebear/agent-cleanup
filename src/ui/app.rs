@@ -10,6 +10,7 @@ use agent_cleanup::config::Config;
 use agent_cleanup::config::path_within;
 use agent_cleanup::deps::{self, Eco};
 use agent_cleanup::downloads::{self, Download};
+use agent_cleanup::jobs::{self, Op, Outcome};
 use agent_cleanup::junk;
 use agent_cleanup::library::{Filter, Library, SortBy};
 use agent_cleanup::model::{Repo, display_path, human_size};
@@ -47,7 +48,7 @@ pub enum Page {
     Help,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum UpdateState {
     Idle,
     Checking,
@@ -79,6 +80,42 @@ pub struct Notice {
     pub undo_downloads: Vec<(Download, Option<PathBuf>)>,
     /// Agent data that was just recycled.
     pub undo_agentdata: Vec<Orphan>,
+}
+
+impl Notice {
+    fn new(text: impl Into<String>, is_error: bool) -> Self {
+        Self {
+            text: text.into().trim().to_string(),
+            is_error,
+            shown_at: Instant::now(),
+            undo: Vec::new(),
+            undo_trail: Vec::new(),
+            undo_junk: Vec::new(),
+            undo_downloads: Vec::new(),
+            undo_agentdata: Vec::new(),
+        }
+    }
+}
+
+/// What a background job is doing, so its results go to the right list.
+enum JobKind {
+    Repos,
+    Trail,
+    Downloads,
+    AgentData,
+    /// Putting back what this notice offered to undo.
+    Undo(Box<Notice>),
+}
+
+/// Recycling or restoring on a background thread, so the window never
+/// freezes while big folders move.
+pub struct Job {
+    rx: Receiver<Vec<Outcome>>,
+    /// What the toast says while it runs.
+    pub label: String,
+    kind: JobKind,
+    /// What each step was for, in step order.
+    keys: Vec<PathBuf>,
 }
 
 /// Which page's things a confirm dialog is about.
@@ -178,6 +215,8 @@ pub struct AgentCleanup {
     /// The "Remove all app data" dialog is open.
     pub confirm_wipe: bool,
     pub notice: Option<Notice>,
+    /// A recycle or undo in progress.
+    pub busy: Option<Job>,
     pub skipped_setup: bool,
     pub needs_rescan: bool,
     pub update: Arc<Mutex<UpdateState>>,
@@ -194,7 +233,12 @@ pub struct AgentCleanup {
     pub weekly: Option<schedule::Status>,
     pub list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
-    _poll: Task<()>,
+    /// The last update state the window drew.
+    update_seen: UpdateState,
+    /// Whether the timer that picks up background results is running. It
+    /// only runs while something is in flight, so an idle app stays asleep.
+    polling: bool,
+    _poll: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -207,15 +251,6 @@ impl AgentCleanup {
                 cx.notify();
             }
         });
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL).await;
-                if this.update(cx, |this, cx| this.tick(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-
         let (cfg, damaged) = Config::load_checked();
         let cache = ScanCache::load(&cfg);
         let mut app = Self {
@@ -233,6 +268,7 @@ impl AgentCleanup {
             confirm: None,
             confirm_wipe: false,
             notice: None,
+            busy: None,
             skipped_setup: false,
             needs_rescan: false,
             update: Arc::new(Mutex::new(UpdateState::Idle)),
@@ -250,7 +286,9 @@ impl AgentCleanup {
             weekly: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
-            _poll: poll,
+            update_seen: UpdateState::Idle,
+            polling: false,
+            _poll: None,
             _subscriptions: vec![sub],
             cfg,
         };
@@ -292,16 +330,7 @@ impl AgentCleanup {
     }
 
     pub fn notify_text(&mut self, text: impl Into<String>, is_error: bool) {
-        self.notice = Some(Notice {
-            text: text.into(),
-            is_error,
-            shown_at: Instant::now(),
-            undo: Vec::new(),
-            undo_trail: Vec::new(),
-            undo_junk: Vec::new(),
-            undo_downloads: Vec::new(),
-            undo_agentdata: Vec::new(),
-        });
+        self.notice = Some(Notice::new(text, is_error));
     }
 
     fn save_cache(&self) {
@@ -326,10 +355,54 @@ impl AgentCleanup {
         self.lib.reclassify(&self.cfg);
     }
 
-    /// Runs every [`POLL`]: picks up scan results, update progress and
-    /// expires the notice. Only redraws when something changed.
+    /// True while something is running that the window has to hear back
+    /// from: a scan, a page loading, a recycle, an update, or a notice
+    /// waiting to disappear.
+    fn is_waiting(&self) -> bool {
+        self.scan.is_some()
+            || self.busy.is_some()
+            || self.notice.is_some()
+            || self.trail.loading.is_some()
+            || self.downloads.loading.is_some()
+            || self.agentdata.loading.is_some()
+            || self.junk.loading.is_some()
+            || self.junk.busy.is_some()
+            || self.deps.loading.is_some()
+            || matches!(
+                self.update_state(),
+                UpdateState::Checking | UpdateState::Downloading(..)
+            )
+    }
+
+    /// Starts the [`POLL`] timer if something is in flight and it isn't
+    /// already running. Called on every draw, and every click that starts
+    /// work ends in a draw. The timer stops itself once nothing is left.
+    fn ensure_polling(&mut self, cx: &mut Context<Self>) {
+        if self.polling || !self.is_waiting() {
+            return;
+        }
+        self.polling = true;
+        self._poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL).await;
+                let go_on = this.update(cx, |this, cx| {
+                    this.tick(cx);
+                    this.polling = this.is_waiting();
+                    this.polling
+                });
+                if !matches!(go_on, Ok(true)) {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Runs every [`POLL`] while work is in flight: picks up scan results,
+    /// finished jobs and update progress, and expires the notice. Only
+    /// redraws when something changed.
     fn tick(&mut self, cx: &mut Context<Self>) {
         let mut changed = self.poll_scan()
+            | self.poll_job()
             | self.poll_trail()
             | self.poll_downloads()
             | self.poll_agentdata()
@@ -344,15 +417,76 @@ impl AgentCleanup {
             self.notice = None;
             changed = true;
         }
-        if matches!(
-            self.update_state(),
-            UpdateState::Checking | UpdateState::Downloading(..)
-        ) {
+        let update = self.update_state();
+        if update != self.update_seen {
+            self.update_seen = update;
             changed = true;
         }
         if changed {
             cx.notify();
         }
+    }
+
+    // ---- background recycling ------------------------------------------
+
+    /// Hands the steps to a background thread. The result is picked up by
+    /// [`Self::poll_job`]. One job runs at a time.
+    fn start_job(&mut self, label: String, kind: JobKind, keys: Vec<PathBuf>, ops: Vec<Op>) {
+        if ops.is_empty() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(jobs::run(ops));
+        });
+        self.notice = None;
+        self.busy = Some(Job {
+            rx,
+            label,
+            kind,
+            keys,
+        });
+    }
+
+    /// Says so and returns true if a recycle or undo is still running.
+    fn is_busy(&mut self) -> bool {
+        if self.busy.is_some() {
+            self.notify_text(
+                "Still finishing the last clean-up. Try again in a moment.",
+                true,
+            );
+        }
+        self.busy.is_some()
+    }
+
+    fn poll_job(&mut self) -> bool {
+        let Some(job) = &self.busy else {
+            return false;
+        };
+        let outcomes = match job.rx.try_recv() {
+            Ok(o) => o,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        let Some(job) = self.busy.take() else {
+            return false;
+        };
+        if outcomes.is_empty() {
+            self.notify_text(
+                "The clean-up stopped before it finished. Scan again to see what's still there.",
+                true,
+            );
+            return true;
+        }
+        let results: Vec<(PathBuf, Outcome)> = job.keys.into_iter().zip(outcomes).collect();
+        match job.kind {
+            JobKind::Repos => self.finish_repos(results),
+            JobKind::Trail => self.finish_trail(results),
+            JobKind::Downloads => self.finish_downloads(results),
+            JobKind::AgentData => self.finish_agentdata(results),
+            JobKind::Undo(notice) => self.finish_undo(*notice, results),
+        }
+        true
     }
 
     // ---- updates -------------------------------------------------------
@@ -795,14 +929,8 @@ impl AgentCleanup {
                 .items
                 .retain(|i| !job.done.iter().any(|d| d.path == i.path));
             self.notice = Some(Notice {
-                text: text.trim().to_string(),
-                is_error: !job.failed.is_empty(),
-                shown_at: Instant::now(),
-                undo: Vec::new(),
-                undo_trail: Vec::new(),
                 undo_junk: job.done,
-                undo_downloads: Vec::new(),
-                undo_agentdata: Vec::new(),
+                ..Notice::new(text, !job.failed.is_empty())
             });
         }
     }
@@ -868,31 +996,36 @@ impl AgentCleanup {
     /// Recycles every file and folder of each item. An item that only
     /// partly moved is put back, so nothing is left half removed.
     pub fn recycle_agentdata(&mut self, keys: &[PathBuf]) {
+        if self.is_busy() {
+            return;
+        }
+        let items: Vec<&Orphan> = keys.iter().filter_map(|k| self.orphan(k)).collect();
+        let label = moving_label(match items[..] {
+            [one] => format!("{}'s {} data", one.project_name(), one.agent.label()),
+            _ => format!("agent data for {} projects", items.len()),
+        });
+        let ops = items
+            .iter()
+            .map(|o| Op::Recycle {
+                paths: o.paths.clone(),
+                recheck: false,
+            })
+            .collect();
+        let keys = items.iter().map(|o| o.key().to_path_buf()).collect();
+        self.start_job(label, JobKind::AgentData, keys, ops);
+    }
+
+    fn finish_agentdata(&mut self, results: Vec<(PathBuf, Outcome)>) {
         let mut moved = Vec::new();
         let mut failed = Vec::new();
-        for key in keys {
-            let Some(o) = self.orphan(key).cloned() else {
+        for (key, outcome) in results {
+            let Some(o) = self.orphan(&key).cloned() else {
                 continue;
             };
-            let mut done = Vec::new();
-            let mut err = None;
-            for p in &o.paths {
-                match actions::recycle(p) {
-                    Ok(()) => done.push(p.clone()),
-                    Err(e) => {
-                        err = Some(e);
-                        break;
-                    }
-                }
-            }
-            match err {
-                None => moved.push(o),
-                Some(e) => {
-                    for p in &done {
-                        let _ = actions::restore(p);
-                    }
-                    failed.push(format!("{} ({e})", o.project_name()));
-                }
+            match outcome {
+                Outcome::Done => moved.push(o),
+                Outcome::Failed(e) => failed.push(format!("{} ({e})", o.project_name())),
+                Outcome::Changed(_) => {}
             }
         }
         self.agentdata
@@ -916,14 +1049,8 @@ impl AgentCleanup {
             text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
         }
         self.notice = Some(Notice {
-            text: text.trim().to_string(),
-            is_error: !failed.is_empty(),
-            shown_at: Instant::now(),
-            undo: Vec::new(),
-            undo_trail: Vec::new(),
-            undo_junk: Vec::new(),
-            undo_downloads: Vec::new(),
             undo_agentdata: moved,
+            ..Notice::new(text, !failed.is_empty())
         });
     }
 
@@ -998,14 +1125,8 @@ impl AgentCleanup {
                 self.downloads.items.retain(|x| x.path != d.path);
                 let text = format!("Moved {} into {}.", d.name(), self.short(&m.project));
                 self.notice = Some(Notice {
-                    text,
-                    is_error: false,
-                    shown_at: Instant::now(),
-                    undo: Vec::new(),
-                    undo_trail: Vec::new(),
-                    undo_junk: Vec::new(),
                     undo_downloads: vec![(d, Some(to))],
-                    undo_agentdata: Vec::new(),
+                    ..Notice::new(text, false)
                 });
             }
             Err(e) => self.notify_text(format!("Couldn't move {}: {e}.", d.name()), true),
@@ -1013,15 +1134,36 @@ impl AgentCleanup {
     }
 
     pub fn recycle_downloads(&mut self, paths: &[PathBuf]) {
+        if self.is_busy() {
+            return;
+        }
+        let items: Vec<&Download> = paths.iter().filter_map(|p| self.download_item(p)).collect();
+        let label = moving_label(match items[..] {
+            [one] => one.name(),
+            _ => format!("{} downloads", items.len()),
+        });
+        let keys: Vec<PathBuf> = items.iter().map(|d| d.path.clone()).collect();
+        let ops = keys
+            .iter()
+            .map(|p| Op::Recycle {
+                paths: vec![p.clone()],
+                recheck: false,
+            })
+            .collect();
+        self.start_job(label, JobKind::Downloads, keys, ops);
+    }
+
+    fn finish_downloads(&mut self, results: Vec<(PathBuf, Outcome)>) {
         let mut moved = Vec::new();
         let mut failed = Vec::new();
-        for p in paths {
-            let Some(d) = self.download_item(p).cloned() else {
+        for (p, outcome) in results {
+            let Some(d) = self.download_item(&p).cloned() else {
                 continue;
             };
-            match actions::recycle(p) {
-                Ok(()) => moved.push(d),
-                Err(e) => failed.push(format!("{} ({e})", d.name())),
+            match outcome {
+                Outcome::Done => moved.push(d),
+                Outcome::Failed(e) => failed.push(format!("{} ({e})", d.name())),
+                Outcome::Changed(_) => {}
             }
         }
         self.downloads
@@ -1044,14 +1186,8 @@ impl AgentCleanup {
             text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
         }
         self.notice = Some(Notice {
-            text: text.trim().to_string(),
-            is_error: !failed.is_empty(),
-            shown_at: Instant::now(),
-            undo: Vec::new(),
-            undo_trail: Vec::new(),
-            undo_junk: Vec::new(),
             undo_downloads: moved.into_iter().map(|d| (d, None)).collect(),
-            undo_agentdata: Vec::new(),
+            ..Notice::new(text, !failed.is_empty())
         });
     }
 
@@ -1111,22 +1247,41 @@ impl AgentCleanup {
     }
 
     pub fn recycle_trail(&mut self, paths: &[PathBuf]) {
+        if self.is_busy() {
+            return;
+        }
+        let items: Vec<&Item> = paths.iter().filter_map(|p| self.trail_item(p)).collect();
+        let label = moving_label(match items[..] {
+            [one] => one.name(),
+            _ => format!("{} items", items.len()),
+        });
+        // A project copy that looked fully saved is read again first.
+        let ops = items
+            .iter()
+            .map(|i| Op::Recycle {
+                paths: vec![i.path.clone()],
+                recheck: i.looks_saved(),
+            })
+            .collect();
+        let keys = items.iter().map(|i| i.path.clone()).collect();
+        self.start_job(label, JobKind::Trail, keys, ops);
+    }
+
+    fn finish_trail(&mut self, results: Vec<(PathBuf, Outcome)>) {
         let mut moved = Vec::new();
         let mut failed = Vec::new();
         let mut kept = Vec::new();
-        for p in paths {
-            let Some(item) = self.trail.items.iter_mut().find(|i| &i.path == p) else {
+        for (p, outcome) in results {
+            let Some(item) = self.trail.items.iter_mut().find(|i| i.path == p) else {
                 continue;
             };
-            // A project copy that looked fully saved is read again first.
-            if item.recheck_clean() {
-                kept.push(item.name());
-                continue;
-            }
-            let item = item.clone();
-            match actions::recycle(p) {
-                Ok(()) => moved.push(item),
-                Err(e) => failed.push(format!("{} ({e})", item.name())),
+            match outcome {
+                Outcome::Done => moved.push(item.clone()),
+                Outcome::Failed(e) => failed.push(format!("{} ({e})", item.name())),
+                Outcome::Changed(found) => {
+                    item.apply_recheck(*found);
+                    kept.push(item.name());
+                }
             }
         }
         self.trail
@@ -1158,14 +1313,8 @@ impl AgentCleanup {
         }
         text.push_str(&left_alone(&kept));
         self.notice = Some(Notice {
-            text: text.trim().to_string(),
-            is_error: !failed.is_empty() || !kept.is_empty(),
-            shown_at: Instant::now(),
-            undo: Vec::new(),
             undo_trail: moved,
-            undo_junk: Vec::new(),
-            undo_downloads: Vec::new(),
-            undo_agentdata: Vec::new(),
+            ..Notice::new(text, !failed.is_empty() || !kept.is_empty())
         });
     }
 
@@ -1336,29 +1485,48 @@ impl AgentCleanup {
     }
 
     pub fn recycle(&mut self, paths: &[PathBuf]) {
-        // The list can come from a scan saved days ago. Anything that looked
-        // fully saved is read again now, and left alone if that changed.
-        let changed = self.lib.recheck_clean(paths);
-        let mut moved_paths: Vec<PathBuf> = Vec::new();
-        let mut failed = Vec::new();
+        if self.is_busy() {
+            return;
+        }
         // Outer folders first, so a project copy inside another one that's
         // also going is known to have gone with it.
-        let mut paths: Vec<&PathBuf> = paths.iter().collect();
-        paths.sort_by_key(|p| p.components().count());
-        for p in paths {
-            if changed.contains(p) {
-                continue;
-            }
-            let Some(repo) = self.lib.get(p) else {
+        let mut keys: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| self.lib.get(p).is_some())
+            .cloned()
+            .collect();
+        keys.sort_by_key(|p| p.components().count());
+        let label = moving_label(match &keys[..] {
+            [one] => self.lib.get(one).map(|r| r.name()).unwrap_or_default(),
+            _ => format!("{} project copies", keys.len()),
+        });
+        // The list can come from a scan saved days ago. Anything that looked
+        // fully saved is read again first, and left alone if that changed.
+        let ops = keys
+            .iter()
+            .map(|p| Op::Recycle {
+                paths: vec![p.clone()],
+                recheck: self.lib.looks_saved(p),
+            })
+            .collect();
+        self.start_job(label, JobKind::Repos, keys, ops);
+    }
+
+    fn finish_repos(&mut self, results: Vec<(PathBuf, Outcome)>) {
+        let mut moved_paths = Vec::new();
+        let mut failed = Vec::new();
+        let mut kept = Vec::new();
+        for (p, outcome) in results {
+            let Some(name) = self.lib.get(&p).map(|r| r.name()) else {
                 continue;
             };
-            if moved_paths.iter().any(|m| m != p && path_within(p, m)) {
-                moved_paths.push(p.clone());
-                continue;
-            }
-            match actions::recycle(p) {
-                Ok(()) => moved_paths.push(p.clone()),
-                Err(e) => failed.push(format!("{} ({e})", repo.name())),
+            match outcome {
+                Outcome::Done => moved_paths.push(p),
+                Outcome::Failed(e) => failed.push(format!("{name} ({e})")),
+                Outcome::Changed(found) => {
+                    self.lib.apply_recheck(&p, *found);
+                    kept.push(name);
+                }
             }
         }
         let moved = self.lib.remove(&moved_paths);
@@ -1392,91 +1560,116 @@ impl AgentCleanup {
         if !failed.is_empty() {
             text.push_str(&format!(" Couldn't move: {}.", failed.join(", ")));
         }
-        let kept: Vec<String> = changed
-            .iter()
-            .filter_map(|p| self.lib.get(p).map(|r| r.name()))
-            .collect();
         text.push_str(&left_alone(&kept));
         self.notice = Some(Notice {
-            text: text.trim().to_string(),
-            is_error: !failed.is_empty() || !changed.is_empty(),
-            shown_at: Instant::now(),
             undo: moved,
-            undo_trail: Vec::new(),
-            undo_junk: Vec::new(),
-            undo_downloads: Vec::new(),
-            undo_agentdata: Vec::new(),
+            ..Notice::new(text, !failed.is_empty() || !kept.is_empty())
         });
     }
 
     pub fn undo(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
         let Some(mut notice) = self.notice.take() else {
             return;
         };
         if !notice.undo_junk.is_empty() {
             let items = std::mem::take(&mut notice.undo_junk);
             self.start_junk_job(items, true);
-            if notice.undo.is_empty()
-                && notice.undo_trail.is_empty()
-                && notice.undo_downloads.is_empty()
-                && notice.undo_agentdata.is_empty()
-            {
-                return;
-            }
         }
-        let mut failed = Vec::new();
-        let mut restored = 0;
         // Outer folders first: putting one back brings back what's inside.
         notice.undo.sort_by_key(|r| r.path.components().count());
+        let mut keys = Vec::new();
+        let mut ops = Vec::new();
+        for repo in &notice.undo {
+            keys.push(repo.path.clone());
+            ops.push(Op::Restore {
+                paths: vec![repo.path.clone()],
+                ok_if_present: true,
+            });
+        }
+        for item in &notice.undo_trail {
+            keys.push(item.path.clone());
+            ops.push(Op::Restore {
+                paths: vec![item.path.clone()],
+                ok_if_present: false,
+            });
+        }
+        for (d, moved_to) in &notice.undo_downloads {
+            keys.push(d.path.clone());
+            ops.push(match moved_to {
+                Some(to) => Op::MoveBack {
+                    from: to.clone(),
+                    to: d.path.clone(),
+                },
+                None => Op::Restore {
+                    paths: vec![d.path.clone()],
+                    ok_if_present: false,
+                },
+            });
+        }
+        for o in &notice.undo_agentdata {
+            keys.push(o.key().to_path_buf());
+            ops.push(Op::Restore {
+                paths: o.paths.clone(),
+                ok_if_present: false,
+            });
+        }
+        self.start_job(
+            "Putting it back where it was...".to_string(),
+            JobKind::Undo(Box::new(notice)),
+            keys,
+            ops,
+        );
+    }
+
+    /// `results` are in the order [`Self::undo`] queued them: project
+    /// copies, trail items, downloads, agent data.
+    fn finish_undo(&mut self, notice: Notice, results: Vec<(PathBuf, Outcome)>) {
+        let mut outcomes = results.into_iter().map(|(_, o)| o);
+        let mut failed = Vec::new();
+        let mut restored = 0;
         for repo in notice.undo {
-            if repo.path.exists() {
-                restored += 1;
-                self.lib.push(repo);
-                continue;
-            }
-            match actions::restore(&repo.path) {
-                Ok(()) => {
+            match outcomes.next() {
+                Some(Outcome::Done) => {
                     restored += 1;
                     self.lib.push(repo);
                 }
-                Err(e) => failed.push(format!("{} ({e})", repo.name())),
+                Some(Outcome::Failed(e)) => failed.push(format!("{} ({e})", repo.name())),
+                _ => {}
             }
         }
         for item in notice.undo_trail {
-            match actions::restore(&item.path) {
-                Ok(()) => {
+            match outcomes.next() {
+                Some(Outcome::Done) => {
                     restored += 1;
                     // The Leftovers list only picks a repo up again on a scan.
                     self.needs_rescan |= item.is_repo();
                     self.trail.items.push(item);
                 }
-                Err(e) => failed.push(format!("{} ({e})", item.name())),
+                Some(Outcome::Failed(e)) => failed.push(format!("{} ({e})", item.name())),
+                _ => {}
             }
         }
-        for (d, moved_to) in notice.undo_downloads {
-            let res = match &moved_to {
-                Some(to) => downloads::move_back(to, &d.path),
-                None => actions::restore(&d.path),
-            };
-            match res {
-                Ok(()) => {
+        for (d, _) in notice.undo_downloads {
+            match outcomes.next() {
+                Some(Outcome::Done) => {
                     restored += 1;
                     self.downloads.items.push(d);
                 }
-                Err(e) => failed.push(format!("{} ({e})", d.name())),
+                Some(Outcome::Failed(e)) => failed.push(format!("{} ({e})", d.name())),
+                _ => {}
             }
         }
         for o in notice.undo_agentdata {
-            let errs: Vec<String> = o
-                .paths
-                .iter()
-                .filter_map(|p| actions::restore(p).err().map(|e| e.to_string()))
-                .collect();
-            if errs.is_empty() {
-                restored += 1;
-                self.agentdata.items.push(o);
-            } else {
-                failed.push(format!("{} ({})", o.project_name(), errs.join(", ")));
+            match outcomes.next() {
+                Some(Outcome::Done) => {
+                    restored += 1;
+                    self.agentdata.items.push(o);
+                }
+                Some(Outcome::Failed(e)) => failed.push(format!("{} ({e})", o.project_name())),
+                _ => {}
             }
         }
         self.agentdata
@@ -1646,6 +1839,7 @@ impl AgentCleanup {
 
 impl Render for AgentCleanup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_polling(cx);
         let body: AnyElement = if self.show_welcome() && self.page == Page::Leftovers {
             self.welcome(cx).into_any_element()
         } else {
@@ -1686,6 +1880,11 @@ impl Render for AgentCleanup {
             .children(self.confirm_dialog(cx))
             .children(self.wipe_dialog(cx))
     }
+}
+
+/// What the toast says while a recycle runs.
+fn moving_label(what: String) -> String {
+    format!("Moving {what} to the Recycle Bin. Big folders can take a minute.")
 }
 
 /// What a notice says about things that were about to be recycled but

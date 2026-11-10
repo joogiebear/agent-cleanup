@@ -961,7 +961,36 @@ impl AgentCleanup {
         }
     }
 
-    pub fn toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    pub fn toast(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // A recycle or undo in progress takes the toast's place.
+        if let Some(job) = &self.busy {
+            return Some(
+                div()
+                    .absolute()
+                    .bottom(px(20.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        h_flex()
+                            .id("toast-busy")
+                            .occlude()
+                            .max_w(px(640.))
+                            .gap_3()
+                            .px_4()
+                            .py_3()
+                            .rounded(px(12.))
+                            .bg(ELEVATED)
+                            .border_1()
+                            .border_color(BORDER)
+                            .shadow_lg()
+                            .child(icon(IconName::Hourglass, 18., ACCENT))
+                            .child(div().flex_1().min_w_0().child(job.label.clone())),
+                    )
+                    .into_any_element(),
+            );
+        }
         let n = self.notice.as_ref()?;
         let color = if n.is_error { RED } else { GREEN };
         let can_undo = !n.undo.is_empty()
@@ -1019,7 +1048,8 @@ impl AgentCleanup {
                                 }),
                             ),
                         ),
-                ),
+                )
+                .into_any_element(),
         )
     }
 

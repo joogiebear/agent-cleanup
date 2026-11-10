@@ -85,6 +85,7 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 ## Cleaning up
 
 - **Clean up** recycles every repo marked safe in one go. You can also recycle one repo from its card (hover for the buttons), or tick several and choose **Recycle selected**.
+- Recycling and Undo run in the background, so the window stays responsive while big folders move. A note at the bottom says what is being moved.
 - **Undo** appears right after, and puts everything back where it was.
 - **It's a project** tells the app a folder is your real work. **Hide** stops showing a repo (unhide it on the Projects page).
 - Press Escape to close a dialog or the details panel.
@@ -159,7 +160,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`, `private.rs`, `prompts.rs`) has no UI code and is unit tested. `background.rs` is the weekly check, run with `--check`. The window lives in `src/ui/`: `app.rs` (state and actions), one file per page (`leftovers.rs`, `trail.rs`, `downloads.rs`, `agentdata.rs`, `dupes.rs`, `junk.rs`, `updates.rs`, and `pages.rs` for the rest plus the dialogs), `details.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`, `private.rs`, `prompts.rs`, `jobs.rs`) has no UI code and is unit tested. `background.rs` is the weekly check, run with `--check`. The window lives in `src/ui/`: `app.rs` (state and actions), one file per page (`leftovers.rs`, `trail.rs`, `downloads.rs`, `agentdata.rs`, `dupes.rs`, `junk.rs`, `updates.rs`, and `pages.rs` for the rest plus the dialogs), `details.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
 
 ## License
 
