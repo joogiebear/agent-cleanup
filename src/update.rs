@@ -1,6 +1,7 @@
 //! Checks GitHub for a newer release and replaces the running .exe with it.
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -15,6 +16,8 @@ pub struct Update {
     pub download_url: String,
     pub page_url: String,
     pub size: u64,
+    /// The file's SHA-256 as GitHub lists it (lowercase hex), when it does.
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +38,9 @@ pub struct GhAsset {
     pub browser_download_url: String,
     #[serde(default)]
     pub size: u64,
+    /// `"sha256:<hex>"`, which GitHub works out when the file is uploaded.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 pub fn current_version() -> &'static str {
@@ -73,6 +79,11 @@ pub fn pick_update(release: &GhRelease, current: &str) -> Option<Update> {
         download_url: asset.browser_download_url.clone(),
         page_url: release.html_url.clone(),
         size: asset.size,
+        sha256: asset
+            .digest
+            .as_deref()
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .map(str::to_ascii_lowercase),
     })
 }
 
@@ -143,6 +154,7 @@ pub fn download(
     let mut buf = vec![0u8; 64 * 1024];
     let mut done = 0u64;
     let mut first = Vec::new();
+    let mut hasher = Sha256::new();
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
@@ -152,11 +164,28 @@ pub fn download(
             first.extend_from_slice(&buf[..n.min(2 - first.len())]);
         }
         file.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
         done += n as u64;
         progress(done, total);
     }
     file.sync_all()?;
-    verify_download(&first, done, total)
+    verify_download(&first, done, total)?;
+    let got: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    verify_checksum(&got, update.sha256.as_deref())
+}
+
+/// The download must be byte for byte the file GitHub lists for the release.
+fn verify_checksum(got: &str, expected: Option<&str>) -> anyhow::Result<()> {
+    match expected {
+        Some(want) if want != got => {
+            anyhow::bail!("the downloaded file doesn't match the one in the release")
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Sanity checks before replacing ourselves: complete, and actually a Windows program.
@@ -196,6 +225,7 @@ mod tests {
                     name: n.to_string(),
                     browser_download_url: format!("https://example.com/{n}"),
                     size: 5_000_000,
+                    digest: Some("sha256:ABCD".into()),
                 })
                 .collect(),
         }
@@ -219,6 +249,7 @@ mod tests {
         );
         let u = pick_update(&r, "0.2.0").unwrap();
         assert_eq!(u.version, "0.3.0");
+        assert_eq!(u.sha256.as_deref(), Some("abcd"));
         assert!(
             u.download_url
                 .ends_with("agent-cleanup-v0.3.0-windows-x64.exe")
@@ -245,6 +276,9 @@ mod tests {
         assert!(verify_download(b"MZ", 4_000_000, Some(5_000_000)).is_err());
         assert!(verify_download(b"<h", 5_000_000, None).is_err());
         assert!(verify_download(b"MZ", 100, None).is_err());
+        assert!(verify_checksum("abcd", Some("abcd")).is_ok());
+        assert!(verify_checksum("abcd", Some("ffff")).is_err());
+        assert!(verify_checksum("abcd", None).is_ok());
     }
 }
 

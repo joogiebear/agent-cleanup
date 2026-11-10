@@ -130,7 +130,7 @@ Two things are Windows' own, not the app's: whatever you recycle sits in the **R
 
 You also need [Git for Windows](https://git-scm.com/download/win) on your `PATH`.
 
-**Updates:** the app checks for a new release when it starts (you can turn this off in Settings). When one is available, click **Update now** and it downloads the new version, swaps it in, and offers to restart.
+**Updates:** the app checks for a new release when it starts (you can turn this off in Settings). When one is available, click **Update now** and it downloads the new version, checks it against the SHA-256 GitHub lists for that release, swaps it in, and offers to restart.
 
 **Build it yourself** with [Rust](https://rustup.rs):
 
