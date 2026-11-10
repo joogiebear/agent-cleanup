@@ -158,3 +158,7 @@ cargo fmt
 ```
 
 The core logic (`src/config.rs`, `git.rs`, `model.rs`, `scan.rs`, `cache.rs`, `actions.rs`, `update.rs`, `library.rs`, `activity.rs`, `trail.rs`, `junk.rs`, `deps.rs`, `downloads.rs`, `check.rs`, `schedule.rs`, `agentdata.rs`, `dupes.rs`, `footprint.rs`, `private.rs`, `prompts.rs`) has no UI code and is unit tested. `background.rs` is the weekly check, run with `--check`. The window lives in `src/ui/`: `app.rs` (state and actions), one file per page (`leftovers.rs`, `trail.rs`, `downloads.rs`, `agentdata.rs`, `dupes.rs`, `junk.rs`, `updates.rs`, and `pages.rs` for the rest plus the dialogs), `details.rs`, `widgets.rs`, `theme.rs` (palette) and `assets.rs` (fonts and icons).
+
+## License
+
+[MIT](LICENSE). The bundled Inter font is under the SIL Open Font License.
