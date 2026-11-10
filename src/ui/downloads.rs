@@ -41,7 +41,7 @@ fn advice_tag(id: impl Into<ElementId>, a: DownloadAdvice, text: String) -> Stat
         DownloadAdvice::Safe => (
             GREEN,
             IconName::CircleCheck,
-            "An installer. Not needed once the program is installed.",
+            "An installer that arrived over a week ago. Not needed once the program is installed.",
         ),
         DownloadAdvice::Move => (
             ACCENT,
