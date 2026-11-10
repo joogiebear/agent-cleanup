@@ -14,14 +14,7 @@ use std::time::SystemTime;
 
 /// Why to look before recycling, if anything.
 pub fn recent_warning(o: &Orphan, now: SystemTime) -> Option<String> {
-    o.is_recent(now).then(|| {
-        format!(
-            "last used {}",
-            o.last_used
-                .map(|t| relative_time(t, now))
-                .unwrap_or_default()
-        )
-    })
+    o.warning(now)
 }
 
 impl AgentCleanup {
@@ -85,12 +78,12 @@ impl AgentCleanup {
                     human_size(safe_bytes)
                 )
             } else {
-                "Everything here was used recently".to_string()
+                "Everything here needs a look first".to_string()
             };
             let text = if n_safe > 0 {
                 "The projects these chats belonged to are gone, so the chats can't be reopened. Removing them only frees space: no project or file of yours is touched, and they go to the Recycle Bin first."
             } else {
-                "Their projects are gone, but they were used in the last week. If you moved or renamed a project rather than deleting it, you may still want its chats."
+                "Their projects are gone from where they were, but they were used in the last week or a project with the same name exists somewhere else. If you moved or renamed a project rather than deleting it, you may still want its chats."
             };
             let mut tags = h_flex().flex_wrap().gap_2();
             if n_safe > 0 {
@@ -99,7 +92,7 @@ impl AgentCleanup {
                     GREEN,
                     IconName::CircleCheck,
                     format!("{n_safe} safe to clean"),
-                    "Not used in the last week, and the project is gone.",
+                    "Not used in the last week, the project is gone, and no project with the same name was found elsewhere.",
                 ));
             }
             if n_recent > 0 {
@@ -108,7 +101,7 @@ impl AgentCleanup {
                     ORANGE,
                     IconName::TriangleAlert,
                     format!("{n_recent} check first"),
-                    "Used in the last week. The project may only have moved.",
+                    "Used in the last week, or a project with the same name exists somewhere else. The project may only have moved.",
                 ));
             }
             let action = (n_safe > 0 && !loading).then(|| {
@@ -231,14 +224,14 @@ impl AgentCleanup {
                 ORANGE,
                 IconName::TriangleAlert,
                 "Check first",
-                "Used in the last week. The project may only have moved.",
+                "Used in the last week, or a project with the same name exists somewhere else. The project may only have moved.",
             ),
             None => verdict_tag(
                 SharedString::from(format!("ad-care-{key}")),
                 GREEN,
                 IconName::CircleCheck,
                 "Safe to clean",
-                "Not used in the last week, and the project is gone.",
+                "Not used in the last week, the project is gone, and no project with the same name was found elsewhere.",
             ),
         };
         let mut facts = h_flex()
