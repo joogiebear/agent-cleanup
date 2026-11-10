@@ -103,6 +103,10 @@ impl Download {
 
     /// The app's suggestion for this download and why, in plain words.
     pub fn advice(&self) -> (DownloadAdvice, String) {
+        self.advice_at(SystemTime::now())
+    }
+
+    pub fn advice_at(&self, now: SystemTime) -> (DownloadAdvice, String) {
         let name = self.name().to_ascii_lowercase();
         let ext = self
             .path
@@ -114,6 +118,16 @@ impl Download {
             && !is_self
             && (matches!(ext.as_str(), "msi" | "msix")
                 || (ext == "exe" && ["setup", "install"].iter().any(|w| name.contains(w))));
+        // A new installer may not have been run yet.
+        let waited = now
+            .duration_since(self.arrived)
+            .is_ok_and(|d| d >= INSTALLER_WAIT);
+        if installer && !waited {
+            return (
+                DownloadAdvice::YourCall,
+                "An installer that arrived in the last week. If you've already installed the program you don't need it, and you can get it again from the program's website.".to_string(),
+            );
+        }
         if installer {
             return (
                 DownloadAdvice::Safe,
@@ -170,6 +184,9 @@ impl Download {
         Some(m.project.join(self.path.file_name()?))
     }
 }
+
+/// How long an installer sits in Downloads before it's cleaned in one click.
+pub const INSTALLER_WAIT: Duration = Duration::from_secs(7 * 86_400);
 
 /// What the app suggests doing with a download.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -636,6 +653,14 @@ mod tests {
             DownloadAdvice::Safe
         );
         assert_eq!(d("thing.msi", None).advice().0, DownloadAdvice::Safe);
+        let msi = d("thing.msi", None);
+        let soon = msi.arrived + Duration::from_secs(86_400);
+        assert_eq!(
+            msi.advice_at(soon).0,
+            DownloadAdvice::YourCall,
+            "may not have been run yet"
+        );
+        assert_eq!(msi.advice_at(soon + INSTALLER_WAIT).0, DownloadAdvice::Safe);
         assert_eq!(d("tool.exe", None).advice().0, DownloadAdvice::YourCall);
         let m = Match {
             project: PathBuf::from("/code/site"),

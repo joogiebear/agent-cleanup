@@ -144,6 +144,28 @@ impl Item {
     /// Reasons to think twice before recycling, in plain words. Empty means
     /// it looks like something the agent made and nothing else depends on.
     pub fn warnings(&self) -> Vec<String> {
+        self.warnings_at(SystemTime::now())
+    }
+
+    /// A document the agent wrote: a report, plan or notes, the kind of
+    /// thing someone asks for and wants to keep.
+    pub fn is_document(&self) -> bool {
+        let ext = self
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        self.kind == Kind::File && !self.is_dir && DOCUMENT_EXTS.contains(&ext.as_str())
+    }
+
+    /// Made within the last [`FRESH`]: the agent, or you, may still be
+    /// using it.
+    pub fn is_fresh(&self, now: SystemTime) -> bool {
+        self.when
+            .is_some_and(|w| now.duration_since(w).is_ok_and(|d| d < FRESH) || w > now)
+    }
+
+    pub fn warnings_at(&self, now: SystemTime) -> Vec<String> {
         let mut out = Vec::new();
         if self.existed_before {
             out.push("it was already there before the agent touched it".to_string());
@@ -162,6 +184,14 @@ impl Item {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| repo.display().to_string())
             ));
+        }
+        if self.is_fresh(now) {
+            out.push(
+                "the agent made it less than a day ago, so it may still be in use".to_string(),
+            );
+        }
+        if self.is_document() {
+            out.push("it's a document the agent wrote, which you may have asked for".to_string());
         }
         if self.private_files_total > 0 {
             out.push(if self.is_dir {
@@ -221,8 +251,12 @@ impl Item {
                 "Take a look before removing this: {}. The agent put it inside another project, so it may be work that project needs.",
                 self.warnings().join(", ")
             ),
-            Advice::CheckFirst if !self.is_repo() => format!(
+            Advice::CheckFirst if self.private_files_total > 0 => format!(
                 "Take a look before removing this: {}. Files like these hold passwords, keys or data you can't download again. Copy out anything you need first.",
+                self.warnings().join(", ")
+            ),
+            Advice::CheckFirst if !self.has_local_work() => format!(
+                "Take a look before removing this: {}. If you don't need it, it's fine to recycle.",
                 self.warnings().join(", ")
             ),
             Advice::CheckFirst => format!(
@@ -259,6 +293,12 @@ impl Advice {
         }
     }
 }
+
+/// How new something is while it's kept out of one-click clean-ups.
+pub const FRESH: Duration = Duration::from_secs(86_400);
+
+/// File types that are usually something written for a person to read.
+const DOCUMENT_EXTS: [&str; 8] = ["md", "markdown", "txt", "pdf", "doc", "docx", "rtf", "odt"];
 
 /// How far back the trail reads logs.
 pub const DAYS: u64 = 90;
@@ -1218,7 +1258,8 @@ not json
         assert_eq!(notes.size_bytes, 5);
         assert_eq!(notes.agent, Agent::ClaudeCode);
         assert_eq!(notes.project, proj);
-        assert!(!notes.needs_care());
+        assert!(notes.is_document(), "a note may have been asked for");
+        assert_eq!(notes.advice(), Advice::CheckFirst);
 
         assert_eq!(items[2].kind, Kind::Edited);
         assert!(items[2].existed_before);
@@ -1258,6 +1299,35 @@ not json
         };
         assert_eq!(base.advice(), Advice::Safe);
         assert!(base.explain().contains("downloaded again"));
+
+        let now = SystemTime::now();
+        let fresh = Item {
+            when: Some(now - Duration::from_secs(3600)),
+            ..base.clone()
+        };
+        assert_eq!(fresh.advice(), Advice::CheckFirst, "made an hour ago");
+        assert!(fresh.explain().contains("less than a day ago"));
+        let older = Item {
+            when: Some(now - FRESH - Duration::from_secs(60)),
+            ..base.clone()
+        };
+        assert_eq!(older.advice(), Advice::Safe);
+        let report = Item {
+            kind: Kind::File,
+            path: PathBuf::from("/tmp/Report.MD"),
+            ..base.clone()
+        };
+        assert_eq!(report.advice(), Advice::CheckFirst);
+        assert!(report.explain().contains("document"));
+        let fetched = Item {
+            path: PathBuf::from("/tmp/manual.pdf"),
+            ..base.clone()
+        };
+        assert_eq!(
+            fetched.advice(),
+            Advice::Safe,
+            "a download can be fetched again"
+        );
 
         let mine = Item {
             kind: Kind::Edited,

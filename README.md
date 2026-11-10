@@ -26,7 +26,7 @@ The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **
 
 Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sessions`). The **Agent trail** page reads the last 90 days of those logs, read-only, and lists what an agent made outside the folder it was working in: files it wrote, things it downloaded with `curl` or `wget`, and repos it cloned. Items are grouped by the project the agent was working on, with which agent did it and when.
 
-Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work or one git can't read, a private-looking file, or a file inside another repo that isn't one of your projects) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
+Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work or one git can't read, a private-looking file, a file inside another repo that isn't one of your projects, a document the agent wrote such as a `.md` or `.pdf` report, or anything made in the last day) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
 
 Downloads, Agent data, Duplicates and Build junk work the same way: a verdict tag and reason on every item, and a banner that says what's safe and what you'd lose.
 
@@ -42,7 +42,7 @@ The **Downloads** page lists what arrived in your Downloads folder in the last 9
 
 Closer events count more. A project needs a clear lead over the next one, otherwise the file goes under **No clear project** rather than getting a wrong guess. Each row says why it matched, like "You used git there 4 min before it arrived".
 
-**Move into project** moves the file into the project's folder (it won't overwrite anything there, and won't copy across drives). It isn't offered for private-looking files such as a `.env` or a key, so they can't end up committed by accident. Undo moves it back. You can also recycle a download, hide it, or show it in File Explorer.
+**Move into project** moves the file into the project's folder (it won't overwrite anything there, and won't copy across drives). It isn't offered for private-looking files such as a `.env` or a key, so they can't end up committed by accident. Undo moves it back. Installers (`.msi`, `.msix`, setup or install `.exe`) are marked **Safe to clean** once they're a week old; newer ones might not have been run yet. You can also recycle a download, hide it, or show it in File Explorer.
 
 ![Downloads](docs/downloads.png)
 
