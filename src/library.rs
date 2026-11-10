@@ -203,36 +203,46 @@ impl Library {
         removed
     }
 
-    /// Reads git again for the repos in `paths` that the last scan found
-    /// nothing unsaved in, right before they're recycled. The scan can be
-    /// days old (results are saved between runs), and work may have been done
-    /// in a repo since. Any that now hold unsaved work, or that git can no
-    /// longer read, are updated in the list and returned, so the caller
-    /// leaves them where they are.
+    /// True if the last scan found nothing unsaved in this repo. Those are
+    /// the ones worth a second look right before they're recycled: the scan
+    /// can be days old (results are saved between runs), and work may have
+    /// been done in the repo since.
+    pub fn looks_saved(&self, path: &Path) -> bool {
+        self.get(path)
+            .is_some_and(|r| r.inspected && !r.has_local_work())
+    }
+
+    /// Records what a second look found (see [`crate::jobs::recheck`]).
+    pub fn apply_recheck(&mut self, path: &Path, found: crate::jobs::Recheck) {
+        let Some(&i) = self.index.get(path) else {
+            return;
+        };
+        let r = &mut self.repos[i];
+        match found.git {
+            Ok(g) => r.git = Some(g),
+            Err(e) => {
+                r.git = None;
+                r.error = Some(e);
+                r.private_files = found.private_files;
+                r.private_files_total = found.private_files_total;
+            }
+        }
+    }
+
+    /// Takes that second look at each of `paths` that [`looks_saved`]. Any
+    /// that now hold unsaved work, or that git can no longer read, are
+    /// updated in the list and returned, so the caller leaves them where
+    /// they are.
+    ///
+    /// [`looks_saved`]: Library::looks_saved
     pub fn recheck_clean(&mut self, paths: &[PathBuf]) -> Vec<PathBuf> {
         let mut changed = Vec::new();
         for p in paths {
-            let Some(&i) = self.index.get(p) else {
-                continue;
-            };
-            let r = &mut self.repos[i];
-            // Already flagged: the confirm dialog showed what would be lost.
-            // Gone from disk: recycling reports that itself.
-            if !r.inspected || r.has_local_work() || !p.exists() {
-                continue;
-            }
-            match crate::git::inspect(p) {
-                Ok(g) if !g.has_local_work() => r.git = Some(g),
-                Ok(g) => {
-                    r.git = Some(g);
-                    changed.push(p.clone());
-                }
-                Err(e) => {
-                    r.git = None;
-                    r.error = Some(e.to_string());
-                    (r.private_files, r.private_files_total) = crate::private::find(p);
-                    changed.push(p.clone());
-                }
+            if self.looks_saved(p)
+                && let Some(found) = crate::jobs::recheck(p)
+            {
+                self.apply_recheck(p, found);
+                changed.push(p.clone());
             }
         }
         changed

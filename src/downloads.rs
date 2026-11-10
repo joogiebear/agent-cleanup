@@ -13,7 +13,6 @@
 use crate::config::{Config, path_within};
 use crate::trail::{self, Agent, Kind};
 use std::collections::HashMap;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -343,13 +342,8 @@ pub fn session_events(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let Ok(f) = std::fs::File::open(&log) else {
+        let Some(s) = trail::read_session(agent, &log, home) else {
             continue;
-        };
-        let reader = BufReader::new(f);
-        let s = match agent {
-            Agent::ClaudeCode => trail::parse_claude(reader, Some(home)),
-            Agent::Codex => trail::parse_codex(reader, Some(home)),
         };
         for (when, cwd) in &s.active {
             if let Some(p) = project_for(cwd, projects) {

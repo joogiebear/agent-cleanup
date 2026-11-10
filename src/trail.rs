@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -210,24 +211,30 @@ impl Item {
         !self.warnings().is_empty()
     }
 
-    /// Reads git again for a project copy that looked fully saved when the
-    /// page was loaded, right before it's recycled. Returns true (and keeps
-    /// what it found) if it now holds unsaved work or can't be read, so the
-    /// caller leaves it where it is.
+    /// A project copy that looked fully saved when the page was loaded:
+    /// worth a second look right before it's recycled.
+    pub fn looks_saved(&self) -> bool {
+        self.is_repo() && self.git.as_ref().is_some_and(|g| !g.has_local_work())
+    }
+
+    /// Records what that second look found (see [`crate::jobs::recheck`]).
+    pub fn apply_recheck(&mut self, found: crate::jobs::Recheck) {
+        self.git = found.git.ok();
+    }
+
+    /// Takes the second look. Returns true (and keeps what it found) if the
+    /// copy now holds unsaved work or can't be read, so the caller leaves
+    /// it where it is.
     pub fn recheck_clean(&mut self) -> bool {
-        if !self.is_repo() || self.git.as_ref().is_none_or(GitState::has_local_work) {
+        if !self.looks_saved() {
             return false;
         }
-        match git::inspect(&self.path) {
-            Ok(g) => {
-                let unsaved = g.has_local_work();
-                self.git = Some(g);
-                unsaved
+        match crate::jobs::recheck(&self.path) {
+            Some(found) => {
+                self.apply_recheck(found);
+                true
             }
-            Err(_) => {
-                self.git = None;
-                self.path.exists()
-            }
+            None => false,
         }
     }
 
@@ -901,6 +908,37 @@ pub fn log_files(home: &Path, since: SystemTime) -> Vec<(Agent, PathBuf)> {
     out.into_iter().map(|(a, p, _)| (a, p)).collect()
 }
 
+type ParsedLogs = HashMap<PathBuf, (SystemTime, u64, Arc<Session>)>;
+
+/// Logs already parsed in this run of the app, by path, with the file's
+/// modified time and size when it was read.
+static PARSED: Mutex<Option<ParsedLogs>> = Mutex::new(None);
+
+/// One session log, reduced to a [`Session`]. Logs can be big, and the
+/// Agent trail and Downloads pages both need them, so each is parsed once
+/// and parsed again only when the file has changed.
+pub fn read_session(agent: Agent, log: &Path, home: &Path) -> Option<Arc<Session>> {
+    let meta = std::fs::metadata(log).ok()?;
+    let stamp = (meta.modified().ok()?, meta.len());
+    if let Ok(cache) = PARSED.lock()
+        && let Some((when, len, session)) = cache.as_ref().and_then(|c| c.get(log))
+        && (*when, *len) == stamp
+    {
+        return Some(session.clone());
+    }
+    let reader = BufReader::new(std::fs::File::open(log).ok()?);
+    let session = Arc::new(match agent {
+        Agent::ClaudeCode => parse_claude(reader, Some(home)),
+        Agent::Codex => parse_codex(reader, Some(home)),
+    });
+    if let Ok(mut cache) = PARSED.lock() {
+        cache
+            .get_or_insert_with(HashMap::new)
+            .insert(log.to_path_buf(), (stamp.0, stamp.1, session.clone()));
+    }
+    Some(session)
+}
+
 /// Whether a touched path is a leftover worth showing: outside the session's
 /// own folder and the user's projects, not hidden, not inside the agents'
 /// own data folders.
@@ -952,18 +990,13 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
-        let Ok(f) = std::fs::File::open(&log) else {
+        let Some(session) = read_session(agent, &log, home) else {
             continue;
         };
-        let reader = BufReader::new(f);
-        let session = match agent {
-            Agent::ClaudeCode => parse_claude(reader, Some(home)),
-            Agent::Codex => parse_codex(reader, Some(home)),
-        };
         let fallback = std::fs::metadata(&log).and_then(|m| m.modified()).ok();
-        for t in session.touches {
+        for t in &session.touches {
             // A file inside a clone the same session made is part of the clone.
-            let path = t.path;
+            let path = t.path.clone();
             if !is_stray(&path, session.cwd.as_deref(), cfg, Some(home)) {
                 continue;
             }
