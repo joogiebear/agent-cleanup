@@ -12,6 +12,7 @@ pub mod downloads;
 pub mod dupes;
 pub mod footprint;
 pub mod git;
+pub mod jobs;
 pub mod junk;
 pub mod library;
 pub mod model;
