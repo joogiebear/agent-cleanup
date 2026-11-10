@@ -75,24 +75,42 @@ pub fn looks_private(name: &str) -> bool {
     }
 }
 
+/// Listed first, and counted, when [`find`] had to stop before it saw the
+/// whole folder. An unfinished look is never treated as "nothing private".
+pub const UNCHECKED: &str = "possibly more, because this folder was too big to check fully";
+
 /// Private-looking files under `dir`, relative to it, at most
 /// [`MAX_LISTED`] of them, plus how many there are in all. Skips folders a
 /// command recreates (like `node_modules`) and git's own `.git` folder.
 pub fn find(dir: &Path) -> (Vec<String>, usize) {
+    find_within(dir, MAX_ENTRIES, MAX_DEPTH)
+}
+
+fn find_within(dir: &Path, max_entries: usize, max_depth: usize) -> (Vec<String>, usize) {
     let mut listed = Vec::new();
     let mut total = 0;
+    let mut seen = 0;
+    let mut cut_short = false;
     let walk = WalkDir::new(dir)
         .follow_links(false)
-        .max_depth(MAX_DEPTH)
+        .max_depth(max_depth)
         .into_iter()
         .filter_entry(|e| {
             e.depth() == 0
                 || !e.file_type().is_dir()
                 || !is_skipped_dir(&e.file_name().to_string_lossy())
         })
-        .take(MAX_ENTRIES)
         .filter_map(Result::ok);
     for e in walk {
+        seen += 1;
+        // A folder at the depth limit has contents nobody looked at.
+        if seen > max_entries || (e.depth() == max_depth && e.file_type().is_dir()) {
+            cut_short = true;
+            if seen > max_entries {
+                break;
+            }
+            continue;
+        }
         if !e.file_type().is_file() || !looks_private(&e.file_name().to_string_lossy()) {
             continue;
         }
@@ -102,6 +120,11 @@ pub fn find(dir: &Path) -> (Vec<String>, usize) {
         {
             listed.push(rel.to_string_lossy().replace('\\', "/"));
         }
+    }
+    if cut_short {
+        listed.insert(0, UNCHECKED.to_string());
+        listed.truncate(MAX_LISTED);
+        total += 1;
     }
     (listed, total)
 }
@@ -366,6 +389,16 @@ mod tests {
         assert_eq!(listed, vec![".env", "config/app.db"]);
         assert_eq!(total, 2);
         assert_eq!(preview(&listed, 5, 1), ".env and 4 more");
+
+        // Stopping early is reported, never read as "nothing private".
+        let (listed, total) = find_within(d, 2, MAX_DEPTH);
+        assert_eq!(listed[0], UNCHECKED);
+        assert!(total >= 1);
+        std::fs::create_dir_all(d.join("a/b/c")).unwrap();
+        let (listed, total) = find_within(d, MAX_ENTRIES, 2);
+        assert_eq!(listed[0], UNCHECKED, "a/b was never opened");
+        assert_eq!(total, 3);
+        assert_eq!(find_within(d, MAX_ENTRIES, 4).1, 2);
     }
 
     #[test]

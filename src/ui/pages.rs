@@ -387,7 +387,11 @@ impl AgentCleanup {
             let (ic, color) = match e.action.as_str() {
                 "recycled" => (IconName::Trash, RED),
                 "restored" => (IconName::ArchiveRestore, GREEN),
-                _ => (IconName::Download, ACCENT),
+                a if a.starts_with("updated to ") => (IconName::CircleArrowUp, ACCENT),
+                a if a.starts_with("ran ") => (IconName::SquareTerminal, ACCENT),
+                a if a.starts_with("moved back from ") => (IconName::ArchiveRestore, GREEN),
+                a if a.starts_with("moved to ") => (IconName::FolderInput, ACCENT),
+                _ => (IconName::Logs, MUTED),
             };
             if i > 0 {
                 list = list.child(divider());
@@ -851,7 +855,7 @@ impl AgentCleanup {
                 .child(block(IconName::Footprints, GREEN, "Agent trail", "Claude Code and Codex keep a log of every session. The Agent trail page reads the last 90 days of them (read-only) and lists files, downloads and clones an agent made outside the folder it was working in. Files an agent only changed, like your .bashrc, are marked Probably yours: they were there before, so they're probably yours."))
                 .child(block(IconName::Download, ACCENT, "Downloads", "The Downloads page guesses which project each recent download was for: one an agent fetched, a project you saved changes in, or a project an agent was working in, close to when it arrived. If two projects are equally likely it doesn't guess. Move into project puts the file in that folder and Undo moves it back. Private-looking files, like passwords or keys, are never offered a move."))
                 .child(block(IconName::Clock, GREEN, "Weekly check", "Turn it on in Settings and Windows runs a quiet scan once a week. If there's at least 100 MB or an old project copy to clean, a notification tells you, and clicking it opens the app. The check itself never moves anything."))
-                .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week needs a tick first in case the project only moved."))
+                .child(block(IconName::Ghost, ORANGE, "Agent data", "Claude Code and Codex keep every session's history, and it stays after you delete the project. The Agent data page lists history whose project folder no longer exists. Data on a drive that isn't connected is left alone, and anything used in the last week, or whose project name turns up in another folder, needs a tick first in case the project only moved."))
                 .child(block(IconName::Copy, BLUE, "Duplicates", "The same project downloaded into more than one folder, matched by the online address it came from. One copy is kept (the one in a project folder, or the most recently used; pin another to change it) and Clean up recycles the extra copies whose work is all saved online."))
                 .child(block(IconName::Package, BLUE, "Build junk", "Dependency and build folders like node_modules, target and .venv take a lot of space and one command recreates them. The Build junk page lists them only when git ignores them and the file that rebuilds them is right there. Clean up only takes them from projects you haven't touched in a while."))
                 .child(block(IconName::CircleArrowUp, ACCENT, "Updates", "For projects in your project folders, the Updates page asks npm, cargo and pip what's outdated. Update opens a terminal running the update so you can watch it, and only when the project has no unsaved edits, so you can see and undo what it changed."))
@@ -1221,7 +1225,7 @@ impl AgentCleanup {
         } else if c.what == ConfirmFor::AgentData {
             (
                 "Their projects are gone, so these sessions can't be resumed anyway. Empty the Recycle Bin afterwards to get the space back.",
-                "Used recently, so the project may have just moved:",
+                "The project may have just moved:",
                 "I don't need these sessions",
             )
         } else if c.what == ConfirmFor::Downloads {

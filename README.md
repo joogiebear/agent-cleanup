@@ -50,7 +50,7 @@ Closer events count more. A project needs a clear lead over the next one, otherw
 
 Claude Code and Codex keep every session's history (`~/.claude/projects`, `~/.claude/file-history` and `~/.codex/sessions`), and it stays behind after you delete the project. The **Agent data** page reads which folder each session ran in and lists the history of projects that no longer exist, with the number of sessions, size and when it was last used. Without the project those sessions can't be resumed.
 
-A project on a drive or network share that isn't connected right now doesn't count as deleted. History used in the last week is marked **Used recently** and needs a tick first, in case the project only moved. **Clean up** leaves those out.
+A project on a drive or network share that isn't connected right now doesn't count as deleted. History used in the last week, or whose project name matches a folder that exists somewhere else (in your project folders or among the scanned repos), needs a tick first, in case the project only moved. **Clean up** leaves those out.
 
 ![Agent data](docs/agentdata.png)
 
@@ -95,6 +95,7 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 - Nothing is ever permanently deleted. Recycle moves folders to the **Recycle Bin**.
 - Every removal asks first. If any item has unsaved work, the dialog lists exactly what would be lost. When the selection is a mix, the main button recycles only the safe ones; taking the rest too needs a ticked box.
 - Private-looking files (`.env`, keys, certificates, password stores, databases) are never cleaned in one click: in repos git ignores them in, in agent-made folders that aren't repos, in repos git can't read (so the Temp folder "select all" skips those) and in Downloads.
+- The search for private-looking files stops after 50,000 entries or 8 folders deep. A folder that hits that limit is treated as not fully checked and needs a tick, never as "nothing private here".
 - Ignored folders named `build`, `dist`, `out`, `bin`, `obj`, `target` or `vendor` only count as rebuildable when the matching build file is right beside them.
 - If git can't read a repo, or can't count its unpushed commits or stashes, the app assumes it has unsaved work. It never guesses "safe".
 - Scan results are saved between runs, so right before a repo that looked safe is recycled, git is read again. If it has gained unsaved work since the scan, it stays where it is and the app says so.
@@ -111,6 +112,7 @@ A cleanup tool shouldn't make its own mess, so here is everything Agent Cleanup 
 | --- | --- | --- |
 | The app | wherever you put `agent-cleanup-<version>-windows-x64.exe` | You downloaded it. There's no installer, no registry entries, no Start menu shortcut and no background service. |
 | `config.toml` | `%APPDATA%\agent-cleanup\config\` | Your settings: project folders, hidden repos, the stale days. A few KB. |
+| `config.toml.bad` | same folder | Only if the settings file was ever damaged: the app keeps the damaged copy here and tells you, instead of losing your settings silently. |
 | `last_scan.toml` | same folder | The last scan's results, so the app opens instantly. Replaced on every scan, never grows past one scan. |
 | `actions.log` | same folder | One line per thing moved or put back, so there's always a record. |
 | "Agent Cleanup weekly check" | Windows Task Scheduler | Only while **Weekly check** is on. Turning it off deletes the task. |

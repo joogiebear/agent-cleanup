@@ -216,7 +216,7 @@ impl AgentCleanup {
             }
         });
 
-        let cfg = Config::load();
+        let (cfg, damaged) = Config::load_checked();
         let cache = ScanCache::load(&cfg);
         let mut app = Self {
             home: directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()),
@@ -255,6 +255,13 @@ impl AgentCleanup {
             cfg,
         };
         window.focus(&app.focus, cx);
+        if let Some(bad) = damaged {
+            let text = format!(
+                "Your settings file was damaged, so the app started with default settings. The old file was kept as {}. Add your project folders again on the Projects page.",
+                app.short(&bad)
+            );
+            app.notify_text(text, true);
+        }
         if app.cfg.check_for_updates {
             app.check_for_updates();
         }
@@ -813,8 +820,10 @@ impl AgentCleanup {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let (cfg, stop) = (self.cfg.clone(), cancel.clone());
+        let repos: Vec<PathBuf> = self.lib.repos().iter().map(|r| r.path.clone()).collect();
         std::thread::spawn(move || {
-            let _ = tx.send(agentdata::find(&home, &cfg, &stop));
+            let known = agentdata::known_projects(&repos, &cfg);
+            let _ = tx.send(agentdata::find(&home, &cfg, &known, &stop));
         });
         self.agentdata.loading = Some((rx, cancel));
     }
@@ -1330,8 +1339,12 @@ impl AgentCleanup {
         // The list can come from a scan saved days ago. Anything that looked
         // fully saved is read again now, and left alone if that changed.
         let changed = self.lib.recheck_clean(paths);
-        let mut moved_paths = Vec::new();
+        let mut moved_paths: Vec<PathBuf> = Vec::new();
         let mut failed = Vec::new();
+        // Outer folders first, so a project copy inside another one that's
+        // also going is known to have gone with it.
+        let mut paths: Vec<&PathBuf> = paths.iter().collect();
+        paths.sort_by_key(|p| p.components().count());
         for p in paths {
             if changed.contains(p) {
                 continue;
@@ -1339,6 +1352,10 @@ impl AgentCleanup {
             let Some(repo) = self.lib.get(p) else {
                 continue;
             };
+            if moved_paths.iter().any(|m| m != p && path_within(p, m)) {
+                moved_paths.push(p.clone());
+                continue;
+            }
             match actions::recycle(p) {
                 Ok(()) => moved_paths.push(p.clone()),
                 Err(e) => failed.push(format!("{} ({e})", repo.name())),
@@ -1409,7 +1426,14 @@ impl AgentCleanup {
         }
         let mut failed = Vec::new();
         let mut restored = 0;
+        // Outer folders first: putting one back brings back what's inside.
+        notice.undo.sort_by_key(|r| r.path.components().count());
         for repo in notice.undo {
+            if repo.path.exists() {
+                restored += 1;
+                self.lib.push(repo);
+                continue;
+            }
             match actions::restore(&repo.path) {
                 Ok(()) => {
                     restored += 1;

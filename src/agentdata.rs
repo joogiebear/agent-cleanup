@@ -35,6 +35,9 @@ pub struct Orphan {
     pub sessions: usize,
     pub size_bytes: u64,
     pub last_used: Option<SystemTime>,
+    /// A folder with the project's name that exists somewhere else: the
+    /// project may have been moved or renamed rather than deleted.
+    pub moved_to: Option<PathBuf>,
 }
 
 impl Orphan {
@@ -47,6 +50,24 @@ impl Orphan {
     pub fn is_recent(&self, now: SystemTime) -> bool {
         self.last_used
             .is_some_and(|t| now.duration_since(t).map_or(true, |d| d < RECENT))
+    }
+
+    /// Why to look before recycling, if anything, in plain words.
+    pub fn warning(&self, now: SystemTime) -> Option<String> {
+        if let Some(to) = &self.moved_to {
+            return Some(format!(
+                "a project with the same name is at {}, so it may have moved",
+                to.display()
+            ));
+        }
+        self.is_recent(now).then(|| {
+            format!(
+                "last used {}",
+                self.last_used
+                    .map(|t| crate::model::relative_time(t, now))
+                    .unwrap_or_default()
+            )
+        })
     }
 
     pub fn project_name(&self) -> String {
@@ -147,6 +168,7 @@ pub fn claude(home: &Path, cancel: &AtomicBool) -> Vec<Orphan> {
             size_bytes: paths.iter().map(|p| size(p, cancel)).sum(),
             last_used: logs.iter().filter_map(|l| modified(l)).max(),
             paths,
+            moved_to: None,
         });
     }
     out
@@ -182,16 +204,48 @@ pub fn codex(home: &Path, cancel: &AtomicBool) -> Vec<Orphan> {
                 size_bytes: paths.iter().map(|p| size(p, cancel)).sum(),
                 last_used: paths.iter().filter_map(|p| modified(p)).max(),
                 paths,
+                moved_to: None,
             }
         })
         .collect()
 }
 
-/// Everything found, minus hidden items, biggest first.
-pub fn find(home: &Path, cfg: &Config, cancel: &AtomicBool) -> Vec<Orphan> {
+/// Folders that could be where a "deleted" project went: every project copy
+/// the scan found, and everything directly inside the project folders.
+pub fn known_projects(repos: &[PathBuf], cfg: &Config) -> Vec<PathBuf> {
+    let mut out = repos.to_vec();
+    for root in &cfg.project_roots {
+        if let Ok(rd) = std::fs::read_dir(root) {
+            out.extend(
+                rd.filter_map(Result::ok)
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| e.path()),
+            );
+        }
+    }
+    out
+}
+
+/// Everything found, minus hidden items, biggest first. `known` is from
+/// [`known_projects`]: an orphan whose project name matches one of those
+/// folders is marked as possibly moved.
+pub fn find(home: &Path, cfg: &Config, known: &[PathBuf], cancel: &AtomicBool) -> Vec<Orphan> {
     let mut out = claude(home, cancel);
     out.extend(codex(home, cancel));
     out.retain(|o| !cfg.is_ignored(o.key()));
+    for o in &mut out {
+        let name = o.project.file_name();
+        o.moved_to = known
+            .iter()
+            .find(|k| {
+                name.is_some()
+                    && k.file_name()
+                        .zip(name)
+                        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                    && **k != o.project
+            })
+            .cloned();
+    }
     out.sort_by_key(|o| std::cmp::Reverse(o.size_bytes));
     out
 }
@@ -239,7 +293,7 @@ mod tests {
         write(&cx.join("rollout-3.jsonl"), &codex_meta(&alive));
 
         let cancel = AtomicBool::new(false);
-        let found = find(home, &Config::default(), &cancel);
+        let found = find(home, &Config::default(), &[], &cancel);
         assert_eq!(found.len(), 2);
 
         let c = found.iter().find(|o| o.agent == Agent::ClaudeCode).unwrap();
@@ -263,7 +317,7 @@ mod tests {
             ignored: vec![c.key().to_path_buf()],
             ..Config::default()
         };
-        assert_eq!(find(home, &cfg, &cancel).len(), 1);
+        assert_eq!(find(home, &cfg, &[], &cancel).len(), 1);
     }
 
     #[test]
