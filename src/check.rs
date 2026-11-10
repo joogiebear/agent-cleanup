@@ -52,7 +52,7 @@ impl Summary {
         if self.repos > 0 {
             parts.push(format!(
                 "{} safe to remove ({})",
-                plural(self.repos, "old repo", "old repos"),
+                plural(self.repos, "old project copy", "old project copies"),
                 human_size(self.repo_bytes)
             ));
         }
@@ -116,8 +116,9 @@ pub fn run(cfg: &Config, home: Option<&Path>) -> Summary {
                 s.trail_bytes += it.size_bytes;
             }
         }
-        for o in crate::agentdata::find(home, cfg, &cancel) {
-            if !o.is_recent(now) {
+        let known = crate::agentdata::known_projects(&paths, cfg);
+        for o in crate::agentdata::find(home, cfg, &known, &cancel) {
+            if o.warning(now).is_none() {
                 s.agent_data += 1;
                 s.agent_data_bytes += o.size_bytes;
             }
@@ -169,7 +170,7 @@ mod tests {
         assert_eq!(
             body,
             format!(
-                "2 old repos safe to remove ({}), 1 file left by agents ({}), {} of build folders in idle projects. Click to review.",
+                "2 old project copies safe to remove ({}), 1 file left by agents ({}), {} of build folders in idle projects. Click to review.",
                 human_size(300 * MB),
                 human_size(5 * MB),
                 human_size(1200 * MB)
@@ -181,6 +182,11 @@ mod tests {
             repo_bytes: MB,
             ..Summary::default()
         };
-        assert!(one.message().unwrap().1.starts_with("1 old repo safe"));
+        assert!(
+            one.message()
+                .unwrap()
+                .1
+                .starts_with("1 old project copy safe")
+        );
     }
 }

@@ -455,9 +455,9 @@ impl AgentCleanup {
                                     .text_size(px(16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(format!(
-                                        "{} repo{} can go, freeing {}",
+                                        "{} project cop{} can go, freeing {}",
                                         stats.safe,
-                                        if stats.safe == 1 { "" } else { "s" },
+                                        if stats.safe == 1 { "y" } else { "ies" },
                                         human_size(stats.safe_bytes)
                                     )),
                             )
