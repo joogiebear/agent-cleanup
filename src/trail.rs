@@ -123,6 +123,12 @@ pub struct Item {
     /// The git repo it sits inside, when it isn't one itself: a file an
     /// agent wrote into some other project copy.
     pub inside_repo: Option<PathBuf>,
+    /// A file that changed on disk after the agent last wrote it: someone
+    /// (maybe you) has edited it since, so it isn't just the agent's any more.
+    pub changed_since: bool,
+    /// It sits where settings and keys live (a dot-folder in your home
+    /// folder like `.ssh`, or AppData), so other programs may rely on it.
+    pub settings_place: bool,
 }
 
 impl Item {
@@ -185,6 +191,18 @@ impl Item {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| repo.display().to_string())
             ));
+        }
+        if self.changed_since {
+            out.push(
+                "it was changed after the agent last wrote it, so it may hold someone's edits"
+                    .to_string(),
+            );
+        }
+        if self.settings_place {
+            out.push(
+                "it's where programs keep settings and keys, so something may rely on it"
+                    .to_string(),
+            );
         }
         if self.is_fresh(now) {
             out.push(
@@ -969,6 +987,33 @@ pub fn is_stray(
     true
 }
 
+/// Whether `path` is somewhere programs keep settings, keys and state: a
+/// dot-file or dot-folder directly in the home folder (`.gitconfig`,
+/// `.ssh`, `.aws`), or AppData outside its Temp folder. An agent can
+/// create a file there that something now depends on, so nothing in these
+/// places is ever cleaned in one click.
+pub fn is_settings_place(path: &Path, home: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(home) else {
+        return false;
+    };
+    let mut parts = rest.components().map(|c| c.as_os_str().to_string_lossy());
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if first.starts_with('.') {
+        return true;
+    }
+    if !first.eq_ignore_ascii_case("AppData") {
+        return false;
+    }
+    // AppData\Local\Temp is scratch space; the rest is app data.
+    let local = parts
+        .next()
+        .is_some_and(|p| p.eq_ignore_ascii_case("Local"));
+    let temp = parts.next().is_some_and(|p| p.eq_ignore_ascii_case("Temp"));
+    !(local && temp)
+}
+
 /// The git repo `path` sits inside, if any. Looks up through its parent
 /// folders, stopping at the home folder (a home folder kept in git for
 /// settings files doesn't make everything in it part of a project).
@@ -1028,6 +1073,8 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                             private_files: Vec::new(),
                             private_files_total: 0,
                             inside_repo: None,
+                            changed_since: false,
+                            settings_place: false,
                         },
                     );
                 }
@@ -1081,6 +1128,12 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
                 }
             } else {
                 it.size_bytes = meta.len();
+                // Written to after the agent's last write (with slack for
+                // clocks): not only the agent's work any more.
+                it.changed_since = match (meta.modified(), it.when) {
+                    (Ok(m), Some(w)) => m > w + Duration::from_secs(120),
+                    _ => false,
+                };
                 if crate::private::looks_private(&it.name()) {
                     it.private_files = vec![it.name()];
                     it.private_files_total = 1;
@@ -1089,6 +1142,7 @@ pub fn collect(cfg: &Config, home: &Path, since: SystemTime, cancel: &AtomicBool
             if !it.path.join(".git").exists() {
                 it.inside_repo = enclosing_repo(&it.path, home);
             }
+            it.settings_place = is_settings_place(&it.path, home);
             Some(it)
         })
         .collect();
@@ -1302,6 +1356,29 @@ not json
     }
 
     #[test]
+    fn settings_places() {
+        let home = p("/home/me");
+        for yes in [
+            "/home/me/.gitconfig",
+            "/home/me/.ssh/config",
+            "/home/me/.aws/credentials",
+            "/home/me/AppData/Roaming/tool/settings.json",
+            "/home/me/AppData/Local/tool/cache.bin",
+        ] {
+            assert!(is_settings_place(&p(yes), &home), "{yes}");
+        }
+        for no in [
+            "/home/me/scratch/notes.py",
+            "/home/me/Desktop/x.json",
+            "/home/me/AppData/Local/Temp/clone",
+            "/home/me/code/app/.env",
+            "/tmp/x",
+        ] {
+            assert!(!is_settings_place(&p(no), &home), "{no}");
+        }
+    }
+
+    #[test]
     fn iso_dates() {
         assert_eq!(
             parse_iso8601("1970-01-02T00:00:01Z"),
@@ -1329,8 +1406,21 @@ not json
             private_files: Vec::new(),
             private_files_total: 0,
             inside_repo: None,
+            changed_since: false,
+            settings_place: false,
         };
         assert_eq!(base.advice(), Advice::Safe);
+        let edited = Item {
+            changed_since: true,
+            ..base.clone()
+        };
+        assert_eq!(edited.advice(), Advice::CheckFirst);
+        assert!(edited.explain().contains("changed after the agent"));
+        let dotfile = Item {
+            settings_place: true,
+            ..base.clone()
+        };
+        assert_eq!(dotfile.advice(), Advice::CheckFirst);
         assert!(base.explain().contains("downloaded again"));
 
         let now = SystemTime::now();
