@@ -1054,9 +1054,9 @@ impl AgentCleanup {
         });
         let ops = items
             .iter()
-            .map(|o| Op::Recycle {
+            .map(|o| Op::RecycleIfGone {
+                project: o.project.clone(),
                 paths: o.paths.clone(),
-                recheck: false,
             })
             .collect();
         let keys = items.iter().map(|o| o.key().to_path_buf()).collect();
