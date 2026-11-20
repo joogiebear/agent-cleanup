@@ -80,6 +80,8 @@ pub struct Notice {
     pub undo_downloads: Vec<(Download, Option<PathBuf>)>,
     /// Agent data that was just recycled.
     pub undo_agentdata: Vec<Orphan>,
+    /// A project folder that was just taken off the list.
+    pub undo_project: Option<PathBuf>,
 }
 
 impl Notice {
@@ -93,6 +95,7 @@ impl Notice {
             undo_junk: Vec::new(),
             undo_downloads: Vec::new(),
             undo_agentdata: Vec::new(),
+            undo_project: None,
         }
     }
 
@@ -102,6 +105,7 @@ impl Notice {
             || !self.undo_junk.is_empty()
             || !self.undo_downloads.is_empty()
             || !self.undo_agentdata.is_empty()
+            || self.undo_project.is_some()
     }
 
     /// Plain confirmations go away on their own. One that offers Undo, or
@@ -1442,9 +1446,42 @@ impl AgentCleanup {
         self.save_config();
     }
 
+    /// Takes a folder off the project list. Everything inside it stops
+    /// being protected the moment this runs (a pushed, idle project turns
+    /// into "safe to remove"), so it says so and offers to undo.
     pub fn remove_project(&mut self, p: &Path) {
+        let inside = self
+            .lib
+            .repos()
+            .iter()
+            .filter(|r| path_within(&r.path, p))
+            .count();
         self.cfg.project_roots.retain(|r| r != p);
         self.save_config();
+        let mut text = format!("{} is no longer a project folder.", self.short(p));
+        if inside > 0 {
+            text.push_str(&format!(
+                " The {} inside now count{} as leftover{}.",
+                if inside == 1 {
+                    "project".to_string()
+                } else {
+                    format!("{inside} projects")
+                },
+                if inside == 1 { "s" } else { "" },
+                if inside == 1 { "" } else { "s" },
+            ));
+        }
+        self.notice = Some(Notice {
+            undo_project: Some(p.to_path_buf()),
+            ..Notice::new(text, false)
+        });
+    }
+
+    /// Whether one-click clean-ups are offered. With no project folders the
+    /// app can't tell real work from leftovers: every project that's pushed
+    /// and idle looks safe to remove.
+    pub fn can_bulk_clean(&self) -> bool {
+        !self.cfg.project_roots.is_empty()
     }
 
     pub fn hide(&mut self, p: PathBuf) {
@@ -1633,6 +1670,17 @@ impl AgentCleanup {
         let Some(mut notice) = self.notice.take() else {
             return;
         };
+        if let Some(p) = notice.undo_project.take() {
+            if !self.cfg.project_roots.contains(&p) {
+                self.cfg.project_roots.push(p.clone());
+            }
+            self.save_config();
+            self.notify_text(
+                format!("{} is a project folder again.", self.short(&p)),
+                false,
+            );
+            return;
+        }
         if !notice.undo_junk.is_empty() {
             let items = std::mem::take(&mut notice.undo_junk);
             self.start_junk_job(items, true);
