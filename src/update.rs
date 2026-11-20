@@ -181,10 +181,12 @@ pub fn download(
 /// The download must be byte for byte the file GitHub lists for the release.
 fn verify_checksum(got: &str, expected: Option<&str>) -> anyhow::Result<()> {
     match expected {
-        Some(want) if want != got => {
-            anyhow::bail!("the downloaded file doesn't match the one in the release")
-        }
-        _ => Ok(()),
+        Some(want) if want == got => Ok(()),
+        Some(_) => anyhow::bail!("the downloaded file doesn't match the one in the release"),
+        // Nothing to check it against is not the same as checked.
+        None => anyhow::bail!(
+            "GitHub lists no checksum for this release, so the download can't be checked. Get it from the release page instead"
+        ),
     }
 }
 
@@ -278,7 +280,7 @@ mod tests {
         assert!(verify_download(b"MZ", 100, None).is_err());
         assert!(verify_checksum("abcd", Some("abcd")).is_ok());
         assert!(verify_checksum("abcd", Some("ffff")).is_err());
-        assert!(verify_checksum("abcd", None).is_ok());
+        assert!(verify_checksum("abcd", None).is_err());
     }
 }
 
