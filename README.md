@@ -26,7 +26,7 @@ The left rail switches between **Leftovers**, **Agent trail**, **Downloads**, **
 
 Claude Code and Codex log every session (`~/.claude/projects` and `~/.codex/sessions`). The **Agent trail** page reads the last 90 days of those logs, read-only, and lists what an agent made outside the folder it was working in: files it wrote, things it downloaded with `curl` or `wget`, and repos it cloned. Items are grouped by the project the agent was working on, with which agent did it and when.
 
-Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work or one git can't read, a private-looking file, a file inside another repo that isn't one of your projects, a document the agent wrote such as a `.md` or `.pdf` report, or anything made in the last day) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
+Every item gets a verdict with a one-line reason: **Safe to clean** (the agent made it and nothing in it is unsaved), **Check first** (a clone with unsaved git work or one git can't read, a private-looking file, a file inside another repo that isn't one of your projects, a document the agent wrote such as a `.md` or `.pdf` report, a file that changed on disk after the agent last wrote it, anything in a place programs keep settings and keys such as `~/.ssh`, a dot-file in your home folder or AppData outside Temp, or anything made in the last day) or **Probably yours** (a file the agent only *changed*, say your `.bashrc`, or one older than the session). The banner at the top says how much the safe items free and cleans them in one click; each group can also clean just its safe items. Cleaning never touches the agents' chat history.
 
 Downloads, Agent data, Duplicates and Build junk work the same way: a verdict tag and reason on every item, and a banner that says what's safe and what you'd lose.
 
@@ -102,6 +102,10 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 - If git can't read a repo, or can't count its unpushed commits or stashes, the app assumes it has unsaved work. It never guesses "safe".
 - Scan results are saved between runs, so right before a repo that looked safe is recycled, git is read again. If it has gained unsaved work since the scan, it stays where it is and the app says so.
 - Commits made without a branch (a "detached HEAD", common in agent checkouts) count as unsaved work.
+- A repo cloned from another folder on this PC only counts as saved while that folder exists. If the source is gone, the clone is treated as the only copy.
+- Agent data is checked again right before it's recycled: if the project folder is back, its history stays.
+- With no project folders set, the one-click **Clean up** on Leftovers is off, because every real project would look like a leftover. Removing a project folder says how many projects lose their protection and offers Undo.
+- Git is only ever asked to read. The app never runs a program a scanned repo names in its own settings, and gives up on a git command after two minutes rather than hang (that repo then shows as **Couldn't check**).
 - Every move and restore is written to `actions.log` in `%APPDATA%\agent-cleanup\config\`, next to `config.toml`, and shown on the Activity page.
 
 ![Confirm dialog](docs/confirm-dialog.png)
@@ -134,7 +138,7 @@ Two things are Windows' own, not the app's: whatever you recycle sits in the **R
 
 You also need [Git for Windows](https://git-scm.com/download/win) on your `PATH`.
 
-**Updates:** the app checks for a new release when it starts (you can turn this off in Settings). When one is available, click **Update now** and it downloads the new version, checks it against the SHA-256 GitHub lists for that release, swaps it in, and offers to restart.
+**Updates:** the app checks for a new release when it starts (you can turn this off in Settings). When one is available, click **Update now** and it downloads the new version, checks it against the SHA-256 GitHub lists for that release (and refuses it if there's none to check against), swaps it in, and offers to restart.
 
 **Build it yourself** with [Rust](https://rustup.rs):
 
