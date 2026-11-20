@@ -13,6 +13,14 @@ pub enum Op {
     /// put back. With `recheck`, git is read first and the folder is left
     /// alone if it now holds unsaved work (see [`recheck`]).
     Recycle { paths: Vec<PathBuf>, recheck: bool },
+    /// Recycle an agent's history for `project`, but only while that
+    /// project folder is still missing. The list can be old: if the folder
+    /// came back (a drive was plugged in, a project was restored), these
+    /// are its live chats and they stay.
+    RecycleIfGone {
+        project: PathBuf,
+        paths: Vec<PathBuf>,
+    },
     /// Put these back from the Recycle Bin. With `ok_if_present`, a path
     /// that's already on disk counts as done: it came back with the folder
     /// it sits in.
@@ -86,21 +94,18 @@ fn run_one(op: Op, gone: &mut Vec<PathBuf>) -> Outcome {
             {
                 return Outcome::Done;
             }
-            if look && let Some(found) = paths.first().and_then(|p| recheck(p)) {
+            if look && let Some(found) = paths.iter().find_map(|p| recheck(p)) {
                 return Outcome::Changed(Box::new(found));
             }
-            let mut done: Vec<&PathBuf> = Vec::new();
-            for p in &paths {
-                if let Err(e) = actions::recycle(p) {
-                    for d in done {
-                        let _ = actions::restore(d);
-                    }
-                    return Outcome::Failed(e.to_string());
-                }
-                done.push(p);
+            recycle_together(paths, gone)
+        }
+        Op::RecycleIfGone { project, paths } => {
+            if !crate::agentdata::is_gone(&project) {
+                return Outcome::Failed(
+                    "its project folder is there again, so its history was kept".to_string(),
+                );
             }
-            gone.extend(paths);
-            Outcome::Done
+            recycle_together(paths, gone)
         }
         Op::Restore {
             paths,
@@ -124,9 +129,41 @@ fn run_one(op: Op, gone: &mut Vec<PathBuf>) -> Outcome {
     }
 }
 
+/// Recycles `paths` as one unit: if one fails, the ones already moved are
+/// put back.
+fn recycle_together(paths: Vec<PathBuf>, gone: &mut Vec<PathBuf>) -> Outcome {
+    let mut done: Vec<&PathBuf> = Vec::new();
+    for p in &paths {
+        if let Err(e) = actions::recycle(p) {
+            for d in done {
+                let _ = actions::restore(d);
+            }
+            return Outcome::Failed(e.to_string());
+        }
+        done.push(p);
+    }
+    gone.extend(paths);
+    Outcome::Done
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_agent_history_whose_project_came_back() {
+        let tmp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let project = tmp.path().join("project");
+        let history = tmp.path().join("history.jsonl");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(&history, "{}").unwrap();
+        let out = run(vec![Op::RecycleIfGone {
+            project,
+            paths: vec![history.clone()],
+        }]);
+        assert!(matches!(out[..], [Outcome::Failed(_)]), "{out:?}");
+        assert!(history.exists(), "it stayed where it was");
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = std::process::Command::new("git")

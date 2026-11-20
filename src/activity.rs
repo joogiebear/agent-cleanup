@@ -67,6 +67,27 @@ pub fn parse(text: &str) -> Vec<Entry> {
     out
 }
 
+/// For each entry (newest first, as [`parse`] returns them): whether it's
+/// the latest word on its path and that word is "recycled". Those are the
+/// ones that may still be in the Recycle Bin; anything put back or recycled
+/// again later is answered by the newer line.
+pub fn still_recycled(entries: &[Entry]) -> Vec<bool> {
+    let mut seen: Vec<&Path> = Vec::new();
+    entries
+        .iter()
+        .map(|e| {
+            if !matches!(e.action.as_str(), "recycled" | "restored") {
+                return false;
+            }
+            if seen.iter().any(|s| crate::config::same_path(s, &e.path)) {
+                return false;
+            }
+            seen.push(&e.path);
+            e.action == "recycled"
+        })
+        .collect()
+}
+
 /// The newest `limit` entries from the log, or nothing if there's no log yet.
 pub fn load(limit: usize) -> Vec<Entry> {
     load_from(log_path().as_deref(), limit)
@@ -100,6 +121,21 @@ mod tests {
         assert_eq!(u[0].verb(), "Updated the app to v0.3.0");
         assert_eq!(e[1].when_short(), "2026-11-07 10:00");
         assert_eq!(e[1].path, PathBuf::from("C:\\Users\\me\\Downloads\\clone"));
+    }
+
+    #[test]
+    fn only_the_latest_recycle_of_a_path_can_be_put_back() {
+        let text = "2026-11-07T10:00:00Z\trecycled\tC:\\a\n\
+                    2026-11-07T10:01:00Z\trecycled\tC:\\b\n\
+                    2026-11-07T10:02:00Z\trestored\tC:\\a\n\
+                    2026-11-07T10:03:00Z\tran npm update\tC:\\b\n\
+                    2026-11-07T10:04:00Z\trecycled\tC:\\c\n\
+                    2026-11-07T10:05:00Z\trecycled\tC:\\c\n";
+        // Newest first: c, c, ran, restored a, b, a.
+        assert_eq!(
+            still_recycled(&parse(text)),
+            vec![true, false, false, false, true, false]
+        );
     }
 
     #[test]

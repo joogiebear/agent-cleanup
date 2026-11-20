@@ -433,6 +433,41 @@ impl AgentCleanup {
             );
         } else if self.filter == Filter::Unreadable && stats.unreadable > 0 {
             body = body.child(self.unreadable_guide(now, cx));
+        } else if stats.safe > 0 && self.scan.is_none() && !self.can_bulk_clean() {
+            body = body.child(
+                h_flex()
+                    .gap_4()
+                    .px_5()
+                    .py_4()
+                    .rounded(px(12.))
+                    .bg(tint(ORANGE, 0.12))
+                    .border_1()
+                    .border_color(tint(ORANGE, 0.4))
+                    .child(icon(IconName::TriangleAlert, 24., ORANGE))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Add your project folders before cleaning up"),
+                            )
+                            .child(
+                                div().text_color(MUTED).text_size(px(13.)).child(
+                                    "Without them the app can't tell your real projects from leftovers, so any project that's saved online and idle shows as safe to remove. You can still recycle things one at a time.",
+                                ),
+                            ),
+                    )
+                    .child(
+                        icon_button("clean-add-root", IconName::FolderPlus, "Add a project folder", ButtonKind::Primary)
+                            .h(px(40.))
+                            .px_5()
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_project_folder(cx))),
+                    ),
+            );
         } else if stats.safe > 0 && self.scan.is_none() {
             let safe = self.lib.safe_paths(&self.cfg, now);
             body = body.child(

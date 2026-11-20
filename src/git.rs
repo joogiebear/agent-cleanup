@@ -4,9 +4,15 @@
 //! they see in a terminal.
 
 use anyhow::bail;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// How long one git command may take. A repo on a dead network drive, or a
+/// damaged one, can hang forever; giving up reads as "couldn't check", which
+/// the app treats as unsaved work.
+const TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -144,8 +150,13 @@ fn run<'a>(
     // by tools running elevated) instead of failing with "dubious ownership".
     // core.longpaths: read repos with paths past Windows' 260-character limit.
     // core.quotepath: print file names with accents as they are, not escaped.
+    // core.fsmonitor: a repo's own config can name a program here, and
+    // `git status` runs it. The repos looked at are strangers (an extracted
+    // archive, a folder an agent copied), so never run theirs.
     cmd.arg("-c")
         .arg("safe.directory=*")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("core.longpaths=true")
         .arg("-c")
@@ -155,18 +166,53 @@ fn run<'a>(
         .args(args);
     // Don't let `git status` take the index lock or refresh it on disk.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
+    // Nothing here should ever ask for a password.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.output().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!("Git isn't installed or isn't on PATH")
         } else {
             anyhow::Error::new(e).context("couldn't run git")
         }
+    })?;
+    // Read both pipes on their own threads so a chatty git can't fill one
+    // and block while we wait on it.
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out = drain(child.stdout.take());
+    let err = drain(child.stderr.take());
+    let started = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if started.elapsed() > TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("git took too long to answer, so the app gave up waiting");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
     })
 }
 
@@ -247,7 +293,12 @@ pub fn inspect(repo: &Path) -> anyhow::Result<GitState> {
     let private_files = private.into_iter().take(MAX_LISTED).collect();
 
     let remotes = git(repo, &["remote", "-v"]).unwrap_or_default();
-    let remote_url = parse_first_remote(&remotes).map(|u| redact_credentials(&u));
+    // A remote that's a folder on this PC (agents clone from one scratch
+    // folder to another) only counts while that folder exists. Once it's
+    // gone, "pushed there" means nothing and this copy may be the last.
+    let remote_url = parse_first_remote(&remotes)
+        .filter(|u| !local_remote_gone(repo, u))
+        .map(|u| redact_credentials(&u));
 
     // With no remote every commit is local-only; otherwise count commits on any
     // local branch that no remote-tracking ref contains. `HEAD` is counted too:
@@ -338,6 +389,42 @@ pub fn parse_status_v2(s: &str) -> (Option<String>, usize) {
 fn parse_first_remote(s: &str) -> Option<String> {
     s.lines()
         .find_map(|l| l.split_whitespace().nth(1).map(String::from))
+}
+
+/// The folder a remote points at when it's a path on this PC rather than a
+/// server: `C:\tmp\up`, `../up`, `/tmp/up` or `file:///C:/tmp/up`.
+pub fn local_remote_path(repo: &Path, url: &str) -> Option<std::path::PathBuf> {
+    let path = if let Some(rest) = url.strip_prefix("file://") {
+        // `file:///C:/x` leaves `/C:/x`.
+        let b = rest.as_bytes();
+        if b.len() > 2 && b[0] == b'/' && b[2] == b':' {
+            &rest[1..]
+        } else {
+            rest
+        }
+    } else if url.contains("://") {
+        return None;
+    } else {
+        // `git@host:owner/repo` (scp style) has a colon before any slash,
+        // after more than a drive letter.
+        if let Some(colon) = url.find(':')
+            && colon > 1
+            && !url[..colon].contains(['/', '\\'])
+        {
+            return None;
+        }
+        url
+    };
+    let path = Path::new(path);
+    Some(if path.is_absolute() || path.has_root() {
+        path.to_path_buf()
+    } else {
+        repo.join(path)
+    })
+}
+
+fn local_remote_gone(repo: &Path, url: &str) -> bool {
+    local_remote_path(repo, url).is_some_and(|p| !p.exists())
 }
 
 /// Removes `user:token@` from URLs so access tokens never show up on screen.
@@ -516,6 +603,84 @@ mod tests {
         let g = inspect(&empty).unwrap();
         assert_eq!((g.unpushed_commits, g.stashes), (0, 0));
         assert!(!g.has_local_work());
+    }
+
+    #[test]
+    fn tells_local_remotes_from_servers() {
+        let repo = Path::new("/w/copy");
+        for server in [
+            "https://github.com/a/b.git",
+            "git@github.com:a/b.git",
+            "ssh://git@host/a/b",
+            "host.example.com:a/b",
+        ] {
+            assert_eq!(local_remote_path(repo, server), None, "{server}");
+        }
+        assert_eq!(
+            local_remote_path(repo, "../up"),
+            Some(Path::new("/w/copy/../up").to_path_buf())
+        );
+        assert_eq!(
+            local_remote_path(repo, "file:///C:/tmp/up"),
+            Some(Path::new("C:/tmp/up").to_path_buf())
+        );
+        assert_eq!(
+            local_remote_path(repo, "C:\\tmp\\up"),
+            Some(Path::new("C:\\tmp\\up").to_path_buf())
+        );
+    }
+
+    #[test]
+    fn a_clone_whose_local_source_is_gone_is_the_only_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let up = tmp.path().join("up");
+        std::fs::create_dir_all(&up).unwrap();
+        git(&up, &["init", "-q"]);
+        git(&up, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(tmp.path(), &["clone", "-q", "up", "copy"]);
+        let copy = tmp.path().join("copy");
+        assert!(!inspect(&copy).unwrap().has_local_work());
+
+        std::fs::remove_dir_all(&up).unwrap();
+        let g = inspect(&copy).unwrap();
+        assert_eq!(g.remote_url, None);
+        assert!(g.has_local_work(), "nothing else holds these commits now");
+    }
+
+    #[test]
+    fn never_runs_a_program_the_repo_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = tmp.path().join("repo");
+        std::fs::create_dir_all(&r).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&r)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(r.join("a.txt"), "hi").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "first"]);
+        // What a planted repo would carry: `git status` runs this.
+        git(&["config", "core.fsmonitor", "echo ran > ../RAN; false"]);
+        inspect(&r).unwrap();
+        assert!(
+            !tmp.path().join("RAN").exists(),
+            "the repo's fsmonitor program ran"
+        );
     }
 
     #[test]

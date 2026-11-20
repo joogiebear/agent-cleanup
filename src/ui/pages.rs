@@ -371,6 +371,7 @@ impl AgentCleanup {
 
     pub fn activity_page(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut list = v_flex();
+        let busy = self.busy.is_some();
         if self.activity.is_empty() {
             list = list.child(
                 v_flex()
@@ -425,6 +426,24 @@ impl AgentCleanup {
                                     .child(self.short(&e.path)),
                             ),
                     )
+                    .when(self.activity_undo.get(i).copied().unwrap_or(false), |d| {
+                        let path = e.path.clone();
+                        let b = icon_button(
+                            ("put-back", i),
+                            IconName::Undo2,
+                            "Put back",
+                            ButtonKind::Secondary,
+                        );
+                        d.child(if busy {
+                            disabled(b).tip("Wait for the current clean-up to finish")
+                        } else {
+                            b.tip("Restore it from the Recycle Bin to where it was")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.put_back(path.clone());
+                                    cx.notify();
+                                }))
+                        })
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -934,7 +953,18 @@ impl AgentCleanup {
                     )))
                     .child(
                         button("restart", "Restart now", ButtonKind::Primary)
-                            .on_click(cx.listener(|_, _, _, _| update::relaunch())),
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                // Quitting mid-move could leave a folder half moved.
+                                if this.moving() {
+                                    this.notify_text(
+                                        "Something is still moving to or from the Recycle Bin. Restart when it's done.",
+                                        true,
+                                    );
+                                    cx.notify();
+                                } else {
+                                    update::relaunch()
+                                }
+                            })),
                     )
                     .into_any_element(),
             ),
@@ -993,11 +1023,7 @@ impl AgentCleanup {
         }
         let n = self.notice.as_ref()?;
         let color = if n.is_error { RED } else { GREEN };
-        let can_undo = !n.undo.is_empty()
-            || !n.undo_trail.is_empty()
-            || !n.undo_junk.is_empty()
-            || !n.undo_downloads.is_empty()
-            || !n.undo_agentdata.is_empty();
+        let can_undo = n.can_undo();
         Some(
             div()
                 .absolute()
