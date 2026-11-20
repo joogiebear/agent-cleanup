@@ -953,7 +953,18 @@ impl AgentCleanup {
                     )))
                     .child(
                         button("restart", "Restart now", ButtonKind::Primary)
-                            .on_click(cx.listener(|_, _, _, _| update::relaunch())),
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                // Quitting mid-move could leave a folder half moved.
+                                if this.moving() {
+                                    this.notify_text(
+                                        "Something is still moving to or from the Recycle Bin. Restart when it's done.",
+                                        true,
+                                    );
+                                    cx.notify();
+                                } else {
+                                    update::relaunch()
+                                }
+                            })),
                     )
                     .into_any_element(),
             ),

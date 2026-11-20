@@ -566,7 +566,18 @@ impl AgentCleanup {
 
     // ---- scanning ------------------------------------------------------
 
+    /// True while anything is moving to or from the Recycle Bin.
+    pub fn moving(&self) -> bool {
+        self.busy.is_some() || self.junk.busy.is_some()
+    }
+
     pub fn start_scan(&mut self) {
+        // A scan empties the list the running clean-up reports back into,
+        // which would lose its summary and its Undo. Offer it afterwards.
+        if self.moving() {
+            self.needs_rescan = true;
+            return;
+        }
         if let Some(old) = &self.scan {
             old.cancel.store(true, Ordering::Relaxed);
         }
@@ -838,7 +849,10 @@ impl AgentCleanup {
 
     fn poll_junk(&mut self) -> bool {
         let mut changed = false;
-        if let Some((rx, _, _)) = &self.junk.loading {
+        if let Some((rx, _, _)) = &self.junk.loading
+            && self.junk.busy.is_none()
+            && self.busy.is_none()
+        {
             match rx.try_recv() {
                 Ok(items) => {
                     self.junk.items = items;
@@ -983,6 +997,10 @@ impl AgentCleanup {
     }
 
     fn poll_agentdata(&mut self) -> bool {
+        // Swapping the list under a running clean-up would lose its results.
+        if self.moving() {
+            return false;
+        }
         let Some((rx, _)) = &self.agentdata.loading else {
             return false;
         };
@@ -1101,6 +1119,10 @@ impl AgentCleanup {
     }
 
     fn poll_downloads(&mut self) -> bool {
+        // Swapping the list under a running clean-up would lose its results.
+        if self.moving() {
+            return false;
+        }
         let Some((rx, _)) = &self.downloads.loading else {
             return false;
         };
@@ -1239,6 +1261,10 @@ impl AgentCleanup {
     }
 
     fn poll_trail(&mut self) -> bool {
+        // Swapping the list under a running clean-up would lose its results.
+        if self.moving() {
+            return false;
+        }
         let Some((rx, _)) = &self.trail.loading else {
             return false;
         };
@@ -1369,6 +1395,13 @@ impl AgentCleanup {
     /// is saved again afterwards. On failure the app stays open and says why.
     pub fn remove_all_data(&mut self) {
         self.confirm_wipe = false;
+        if self.moving() {
+            self.notify_text(
+                "Something is still moving to or from the Recycle Bin. Try again when it's done.",
+                true,
+            );
+            return;
+        }
         match agent_cleanup::footprint::remove_all() {
             Ok(()) => std::process::exit(0),
             Err(e) => {
