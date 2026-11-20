@@ -95,6 +95,21 @@ impl Notice {
             undo_agentdata: Vec::new(),
         }
     }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+            || !self.undo_trail.is_empty()
+            || !self.undo_junk.is_empty()
+            || !self.undo_downloads.is_empty()
+            || !self.undo_agentdata.is_empty()
+    }
+
+    /// Plain confirmations go away on their own. One that offers Undo, or
+    /// reports a problem, stays until it's dismissed or replaced: twelve
+    /// seconds isn't long enough to read why something wasn't moved.
+    fn expires(&self) -> bool {
+        !self.is_error && !self.can_undo()
+    }
 }
 
 /// What a background job is doing, so its results go to the right list.
@@ -105,6 +120,8 @@ enum JobKind {
     AgentData,
     /// Putting back what this notice offered to undo.
     Undo(Box<Notice>),
+    /// Putting back one thing from the Activity page.
+    PutBack,
 }
 
 /// Recycling or restoring on a background thread, so the window never
@@ -222,6 +239,8 @@ pub struct AgentCleanup {
     pub update: Arc<Mutex<UpdateState>>,
     pub update_dismissed: bool,
     pub activity: Vec<Entry>,
+    /// Per `activity` row: it was recycled and can still be put back.
+    pub activity_undo: Vec<bool>,
     pub trail: Trail,
     pub downloads: Downloads,
     pub agentdata: AgentData,
@@ -274,6 +293,7 @@ impl AgentCleanup {
             update: Arc::new(Mutex::new(UpdateState::Idle)),
             update_dismissed: false,
             activity: Vec::new(),
+            activity_undo: Vec::new(),
             trail: Trail::default(),
             downloads: Downloads {
                 dir: downloads::downloads_dir(),
@@ -361,7 +381,7 @@ impl AgentCleanup {
     fn is_waiting(&self) -> bool {
         self.scan.is_some()
             || self.busy.is_some()
-            || self.notice.is_some()
+            || self.notice.as_ref().is_some_and(Notice::expires)
             || self.trail.loading.is_some()
             || self.downloads.loading.is_some()
             || self.agentdata.loading.is_some()
@@ -412,6 +432,7 @@ impl AgentCleanup {
             changed = true; // progress counter
         }
         if let Some(n) = &self.notice
+            && n.expires()
             && n.shown_at.elapsed() > Duration::from_secs(NOTICE_SECS)
         {
             self.notice = None;
@@ -485,6 +506,11 @@ impl AgentCleanup {
             JobKind::Downloads => self.finish_downloads(results),
             JobKind::AgentData => self.finish_agentdata(results),
             JobKind::Undo(notice) => self.finish_undo(*notice, results),
+            JobKind::PutBack => self.finish_put_back(results),
+        }
+        // Whatever just moved is in the log now.
+        if self.page == Page::Activity {
+            self.load_activity();
         }
         true
     }
@@ -603,7 +629,7 @@ impl AgentCleanup {
 
     pub fn go(&mut self, page: Page) {
         if page == Page::Activity {
-            self.activity = activity::load(500);
+            self.load_activity();
         }
         if page == Page::Settings && self.weekly.is_none() {
             self.weekly = Some(schedule::status());
@@ -1622,6 +1648,62 @@ impl AgentCleanup {
             keys,
             ops,
         );
+    }
+
+    /// Reads the log for the Activity page and works out which rows can
+    /// still be put back: the latest recycle of a path that isn't on disk.
+    fn load_activity(&mut self) {
+        self.activity = activity::load(500);
+        self.activity_undo = activity::still_recycled(&self.activity)
+            .into_iter()
+            .zip(&self.activity)
+            .map(|(latest, e)| latest && !e.path.exists())
+            .collect();
+    }
+
+    /// Puts one recycled thing back from the Activity page. Works long
+    /// after the Undo toast is gone, as long as it's still in the Recycle
+    /// Bin.
+    pub fn put_back(&mut self, path: PathBuf) {
+        if self.is_busy() {
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.short(&path));
+        self.start_job(
+            format!("Putting {name} back where it was..."),
+            JobKind::PutBack,
+            vec![path.clone()],
+            vec![Op::Restore {
+                paths: vec![path],
+                ok_if_present: false,
+            }],
+        );
+    }
+
+    fn finish_put_back(&mut self, results: Vec<(PathBuf, Outcome)>) {
+        for (path, outcome) in results {
+            let shown = self.short(&path);
+            match outcome {
+                Outcome::Failed(e) => self.notify_text(
+                    format!(
+                        "Couldn't put back {shown}: {e}. If it's still in the Recycle Bin, restore it from there."
+                    ),
+                    true,
+                ),
+                _ => {
+                    // The pages listed it before it went; have them look again.
+                    self.needs_rescan |= path.join(".git").exists();
+                    self.trail.loaded = false;
+                    self.downloads.loaded = false;
+                    self.agentdata.loaded = false;
+                    self.junk.loaded = false;
+                    self.notify_text(format!("Put back {shown}."), false);
+                }
+            }
+        }
     }
 
     /// `results` are in the order [`Self::undo`] queued them: project

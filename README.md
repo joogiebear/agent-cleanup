@@ -86,7 +86,8 @@ Turn on **Weekly check** in Settings and Windows Task Scheduler runs the app onc
 
 - **Clean up** recycles every repo marked safe in one go. You can also recycle one repo from its card (hover for the buttons), or tick several and choose **Recycle selected**.
 - Recycling and Undo run in the background, so the window stays responsive while big folders move. A note at the bottom says what is being moved.
-- **Undo** appears right after, and puts everything back where it was.
+- **Undo** appears right after, and puts everything back where it was. It stays until you dismiss it. Later on, even after a restart, the **Activity** page has a **Put back** button on everything recycled that's still in the Recycle Bin.
+- A note that reports a problem (something couldn't be moved, or was left alone because it gained unsaved work) also stays until you dismiss it.
 - **It's a project** tells the app a folder is your real work. **Hide** stops showing a repo (unhide it on the Projects page).
 - Press Escape to close a dialog or the details panel.
 - **Copy prompt for your agent** (on Leftovers views and on each group of the other pages) copies a ready-to-paste request for Claude Code or Codex: it lists those items with the app's notes and asks the agent to save unsaved work, explain what things are, or move files into their project. It tells the agent not to delete anything, and only includes paths and notes shown on the page, never remote URLs.
